@@ -64,9 +64,20 @@ Asking whether DMS covers tests is SC22; a missing DMS card inside the app is SC
 Questions about documents for a claim are SC18, even when the damage is to property.
 A suspicious caller, payment demand, or SMS link claiming to represent Saqta is SC38.
 A certificate for a visa or embassy is SC39, even if travel is the reason for the certificate.
+Do not invent a second scenario when the client only supplies slots or confirms the active one.
+Mentioning drivers while pricing OGPO is still SC01, not adding a driver to an existing policy (SC04).
+Supplying driver IINs while pricing OGPO is not a purchase request (SC02).
+When an active travel purchase (SC06) is confirmed, do not add OGPO purchase (SC02).
+If a turn both confirms the active appointment (SC21) and asks about coverage (SC22), keep SC21 first.
+An existing claim's status is SC17, even when property damage is mentioned; a new claim is SC14.
+Questions about additional documents or where to send them are SC18, not SC17 or SC14.
+After discussing a suspicious call, a request to check whether a policy is active is SC25, not another fraud report.
 Extract only slot names from the chosen scenario catalog entries. Preserve the slot types
 (for example drivers_iin is a list), normalize dates as YYYY-MM-DD relative to 2026-10-01,
-and do not guess missing values. For a short answer supplying a requested slot, keep the
+and do not guess missing values. All scalar slots (including phone, vehicle plate and IIN)
+must be strings, never arrays; omit missing slots instead of returning empty arrays.
+Normalize phone numbers to +7 followed by 10 digits, with no spaces.
+For a short answer supplying a requested slot, keep the
 active scenario and set is_continuation=true.
 """
 

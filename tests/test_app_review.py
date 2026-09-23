@@ -12,6 +12,14 @@ APP = str(Path(__file__).resolve().parents[1] / "app.py")
 
 
 class AppReview(unittest.TestCase):
+    @staticmethod
+    def _route(ids, slots=None, continuation=False):
+        return {
+            "scenarios": [{"scenario_id": sid, "confidence": 0.99, "reason": "test"} for sid in ids],
+            "alternatives": [], "language": "ru", "slots": slots or {},
+            "is_continuation": continuation,
+        }
+
     def _contact_preview(self):
         router.route = lambda text, state: {
             "scenarios": [{"scenario_id": "SC29", "confidence": 0.99, "reason": "update contact"}],
@@ -60,6 +68,41 @@ class AppReview(unittest.TestCase):
         self.assertIsNone(app.session_state.state.pending_sms)
         self.assertEqual(len(app.session_state.state.mock_data["policies"]), initial_policies)
         self.assertEqual(app.session_state.turn_actions[0]["action"], "send_sms")
+
+    def test_system_scenario_second_in_queue(self):
+        router.route = lambda *_: self._route(["SC33", "SYS_OUT_OF_SCOPE"], {"city": "Almaty"})
+        app = AppTest.from_file(APP).run(timeout=20)
+        app.chat_input[0].set_value("Где офис и можно ли взять кредит?").run(timeout=20)
+        self.assertFalse(app.exception)
+        reply = app.session_state.messages[-1]["text"]
+        self.assertIn("Abai", reply)
+        self.assertIn("Могу помочь только", reply)
+
+    def test_declining_confirmation_runs_next_intent(self):
+        router.route = lambda *_: self._route(["SC29", "SC31"], {"contact_field": "email", "new_value": "new@mail.example"})
+        app = AppTest.from_file(APP).run(timeout=20)
+        app.session_state.state = DialogState(client_id="C001")
+        app.chat_input[0].set_value("Измените почту и расскажите об оплате").run(timeout=20)
+        app.chat_input[0].set_value("Жоқ").run(timeout=20)
+        self.assertFalse(app.exception)
+        self.assertNotEqual(app.session_state.state.mock_data["clients"][0]["email"], "new@mail.example")
+        self.assertIn("Хорошо, отменяю", app.session_state.messages[-1]["text"])
+        self.assertTrue(any(a["action"] == "kb_lookup" for a in app.session_state.turn_actions))
+        self.assertNotIn("{", app.session_state.messages[-1]["text"])
+
+    def test_new_intent_with_slot_answer_is_queued(self):
+        def route(text, _state):
+            if text == "Адрес офиса":
+                return self._route(["SC33"])
+            return self._route(["SC33", "SC31"], {"city": "Almaty"}, continuation=True)
+        router.route = route
+        app = AppTest.from_file(APP).run(timeout=20)
+        app.chat_input[0].set_value("Адрес офиса").run(timeout=20)
+        app.chat_input[0].set_value("Алматы, и какие способы оплаты?").run(timeout=20)
+        self.assertFalse(app.exception)
+        self.assertTrue(any(a["action"] == "get_offices" for a in app.session_state.turn_actions))
+        self.assertTrue(any(a["action"] == "kb_lookup" for a in app.session_state.turn_actions))
+        self.assertEqual(app.session_state.queued_scenarios, [])
 
 
 if __name__ == "__main__":

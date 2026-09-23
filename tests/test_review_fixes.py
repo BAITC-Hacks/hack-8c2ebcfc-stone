@@ -5,6 +5,7 @@ from backend.actions_mock import ActionError, call_action
 from backend.confirmation import classify_confirmation
 from backend.executor import run_scenario
 from backend.state import DialogState
+from backend.slot_normalization import normalize_slot
 from backend.triage import normalize_phone
 
 
@@ -101,6 +102,10 @@ class ReviewFixes(unittest.TestCase):
     def test_spoken_phone(self):
         self.assertEqual(normalize_phone("Плюс жеті, жеті жүз бір, нөл нөл нөл, нөл нөл, нөл екі."), "+77010000002")
         self.assertEqual(normalize_phone("Телефон: плюс жеті, жеті жүз бір, нөл нөл нөл, нөл нөл, он."), "+77010000010")
+        self.assertIsNone(normalize_phone("850314300121"))
+        self.assertIsNone(normalize_slot("phone", ["850314300121"]))
+        self.assertEqual(normalize_slot("phone", ["8 701 555 12 34"]), "+77015551234")
+        self.assertEqual(normalize_slot("culprit_vehicle_plate", ["777abc02"]), "777ABC02")
 
     def test_previews_are_safe_and_stable(self):
         state = DialogState(client_id="C001", slots={"contact_field": "email", "new_value": "new@mail.example"})
