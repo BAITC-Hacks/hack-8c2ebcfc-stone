@@ -1,0 +1,31 @@
+{
+  "meta": {
+    "description": "Handwritten boundary checks, separate from the organizer dev set. Run with predictions.py --input and the reference evaluate.py; requires a real model."
+  },
+  "utterances": [
+    {"id": "B01", "lang": "ru", "type": "single_intent", "text": "После пожара какие бумаги собрать для возмещения?", "expected": ["SC18"]},
+    {"id": "B02", "lang": "kk", "type": "single_intent", "text": "Үйімді су басты. Өтемақы алу үшін қандай құжат жинауым керек?", "expected": ["SC18"]},
+    {"id": "B03", "lang": "ru", "type": "single_intent", "text": "Хочу зарегистрировать страховой случай: в квартире сгорела кухня.", "expected": ["SC14"]},
+    {"id": "B04", "lang": "kk", "type": "single_intent", "text": "Пәтерімді су басты, сақтандыру оқиғасын тіркеңізші.", "expected": ["SC14"]},
+    {"id": "B05", "lang": "ru", "type": "single_intent", "text": "В приложении полис уже выпущен, отправьте его мне на почту, письмо не дошло.", "expected": ["SC26"]},
+    {"id": "B06", "lang": "kk", "type": "single_intent", "text": "Полис рәсімделген, төлем жасалған, бірақ электрондық поштаға келмеді. Қайта жіберіңізші.", "expected": ["SC26"]},
+    {"id": "B07", "lang": "ru", "type": "single_intent", "text": "Деньги списались, при оформлении ошибка, в личном кабинете полиса нет.", "expected": ["SC30"]},
+    {"id": "B08", "lang": "kk", "type": "single_intent", "text": "Картамнан ақша алынды, бірақ полис рәсімделмеді, қосымшада да жоқ.", "expected": ["SC30"]},
+    {"id": "B09", "lang": "ru", "type": "single_intent", "text": "Звонивший назвался вашим сотрудником и требует отправить деньги на личную карту. Это подозрительно.", "expected": ["SC38"]},
+    {"id": "B10", "lang": "kk", "type": "single_intent", "text": "Сіздің қызметкеріңізбін деген адам жеке картасына ақша аударуымды сұрады. Күмәнді екен.", "expected": ["SC38"]},
+    {"id": "B11", "lang": "kk", "type": "single_intent", "text": "Сіздердің атыңыздан келген хабарламада күмәнді сілтемені басуымды сұрапты. Рас па?", "expected": ["SC38"]},
+    {"id": "B12", "lang": "ru", "type": "single_intent", "text": "Мне нужна ваша справка для визового центра на английском языке.", "expected": ["SC39"]},
+    {"id": "B13", "lang": "kk", "type": "single_intent", "text": "Визаға тапсыру үшін ағылшын тілінде анықтама бере аласыздар ма?", "expected": ["SC39"]},
+    {"id": "B14", "lang": "ru", "type": "single_intent", "text": "Хочу купить туристическую страховку для подачи на визу.", "expected": ["SC06"]},
+    {"id": "B15", "lang": "ru", "type": "single_intent", "text": "Оформите мне шенгенскую визу, страховка у меня уже есть.", "expected": ["SYS_OUT_OF_SCOPE"]},
+    {"id": "B16", "lang": "ru", "type": "single_intent", "text": "Нужна медицинская справка о состоянии здоровья для визы.", "expected": ["SYS_OUT_OF_SCOPE"]},
+    {"id": "B17", "lang": "kk", "type": "single_intent", "text": "Виза алу үшін медициналық анықтама бересіздер ме?", "expected": ["SYS_OUT_OF_SCOPE"]},
+    {"id": "B18", "lang": "ru", "type": "single_intent", "text": "Мошенник представился сотрудником моего банка и требует код от банковского приложения.", "expected": ["SYS_OUT_OF_SCOPE"]},
+    {"id": "B19", "lang": "ru", "type": "single_intent", "text": "Какими способами можно оплатить полис?", "expected": ["SC31"]},
+    {"id": "B20", "lang": "mixed", "type": "multi_intent", "text": "Полис уже оформлен, пришлите его на email. Және виза үшін анықтама керек.", "expected": ["SC26", "SC39"]},
+    {"id": "B21", "lang": "ru", "type": "multi_intent", "text": "Пришлите копию договора. И ещё: мне звонит якобы ваш агент и просит код из SMS, проверьте этот подозрительный звонок.", "expected": ["SC38", "SC39"]},
+    {"id": "B22", "lang": "ru", "type": "multi_intent", "text": "Зарегистрируйте затопление квартиры и отдельно объясните, какие документы собрать для возмещения.", "expected": ["SC14", "SC18"]},
+    {"id": "B23", "lang": "ru", "type": "single_intent", "text": "Пришлите дубликат моего договора страхования для архива.", "expected": ["SC39"]},
+    {"id": "B24", "lang": "kk", "type": "single_intent", "text": "Сақтандыру полисін қандай тәсілмен төлеуге болады?", "expected": ["SC31"]}
+  ]
+}

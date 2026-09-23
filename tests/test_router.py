@@ -39,10 +39,11 @@ class RouterTests(unittest.TestCase):
         state.record_turn("bot", "Қай дәрігерге және қай күнге?")
         self.assertEqual(route("Ертең", state), result)
         request = get_client.return_value.chat.completions.create.call_args.kwargs
+        catalog_prompt = request["messages"][0]["content"]
         prompt = request["messages"][1]["content"]
         self.assertIn("Қай дәрігерге және қай күнге?", prompt)
-        self.assertIn('"kk":', prompt)
-        self.assertIn("doctor_specialty", prompt)
+        self.assertIn('"kk":', catalog_prompt)
+        self.assertIn("doctor_specialty", catalog_prompt)
         self.assertIn("active_scenario=SC21", prompt)
 
 

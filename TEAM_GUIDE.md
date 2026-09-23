@@ -48,7 +48,10 @@ mic → STT → Layer 1: Triage → Layer 2: LLM Router → Decision policy → 
 python3 predictions.py
 python3 data/case_2/voice_router_dataset/evaluate.py predictions.json data/case_2/voice_router_dataset/dev_utterances.json
 ```
-Текущий результат: **92% full match, 94% primary accuracy** на dev-сете (после фикса `SYS_OUT_OF_SCOPE`).
+Последняя локальная проверка ветки `codex/router-boundary-fixes`: **104/104 на dev**
+(primary accuracy и full match), **22/24** на дополнительных граничных примерах.
+Это результат настройки на известных наборах, не оценка скрытого теста.
+Методика, ограничения и оставшиеся ошибки — в [docs/router-quality.md](docs/router-quality.md).
 
 ## Структура репозитория
 
@@ -69,8 +72,9 @@ predictions.py          — прогон dev_utterances.json → evaluate.py    
 ## Разделение задач
 
 ### Дария — "мозг" (язык + решение)
-- [x] `triage.py`, `router.py`, `decision_policy.py` — написаны, роутер протестирован (92%/94%)
-- [ ] Добить оставшиеся ошибки eval: SC22/SC40, SC21/SC10, SC18/SC14 (граничные казахские кейсы), 3 multi-intent случая теряют второй сценарий
+- [x] `triage.py`, `router.py`, `decision_policy.py` — написаны
+- [x] Локальный dev-прогон после уточнения границ: 104/104, все 13 multi-intent сохранены; изменение ожидает коммита и PR
+- [ ] Дополнительные границы SC39: казахская справка для визы без упоминания страховки (B13), медицинская справка вне услуг страховщика (B16)
 - [ ] Не тюнить бесконечно — прогонять `evaluate.py` раз в 30 мин, остановиться на diminishing returns
 
 ### Бекарыс — "тело" (состояние + выполнение + интерфейс)
