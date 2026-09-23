@@ -61,7 +61,7 @@ active scenario and set is_continuation=true.
 
 def route(utterance: str, state: DialogState) -> dict:
     enum_slots = [
-        f"{slot['name']}: {', '.join(slot['values'])}"
+        f"{slot['name']}: {', '.join(map(str, slot['values']))}"
         for slot in slots_catalog()["slots"] if slot.get("values")
     ]
     user_prompt = (
