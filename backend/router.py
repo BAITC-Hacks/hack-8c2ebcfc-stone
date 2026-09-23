@@ -28,14 +28,15 @@ def _scenario_catalog_prompt() -> str:
             for r in s.get("not_this_if", [])
         )
         examples = s.get("examples", {})
-        example_ru = next(iter(examples.get("ru", [])), "")
-        example_kk = next(iter(examples.get("kk", [])), "")
+        example_ru = examples.get("ru", [])[:2]
+        example_kk = examples.get("kk", [])[:2]
         lines.append(
             f"{s['scenario_id']} ({s['domain']}/{s['category']}, priority={s['priority']}): "
             f"{s['description']}"
             f" | required slots: {', '.join(s.get('slots', {}).get('required', [])) or 'none'}"
             f" | optional slots: {', '.join(s.get('slots', {}).get('optional', [])) or 'none'}"
-            f" | examples: {example_ru}; {example_kk}"
+            f" | examples_ru: {json.dumps(example_ru, ensure_ascii=False)}"
+            f" | examples_kk: {json.dumps(example_kk, ensure_ascii=False)}"
             + (f" | not this if: {not_this_if}" if not_this_if else "")
         )
     return "\n".join(lines)
@@ -94,6 +95,8 @@ not additional requests. Preserve all actual requests even when they share a pro
 Disambiguate by the requested service, not isolated insurance or company keywords:
 - SC01: only asking for a price/quote. SC02: a clear intention to buy OGPO now.
 - SC22: coverage of a specific medical service, test or medicine under DMS.
+  Lab tests ("талдаулар", "анализы") are a specific service, even if the client
+  only says "my insurance" rather than the letters DMS.
   SC40: explanation of general terms, exclusions, deductibles or limits.
   SC24: the DMS e-card itself is missing or not showing in the app — not a coverage question.
 - SC21: an individual wants a doctor appointment, including with employer-provided DMS.
@@ -110,6 +113,11 @@ Disambiguate by the requested service, not isolated insurance or company keyword
   needs resending. Explicitly saying it is issued takes precedence over mentioning payment.
   SC30: money was debited but issuance failed, the policy is absent from the account,
   or payment/issuance status is uncertain. Payment alone does not prove issuance.
+  A question about when a claim payout will arrive is SC17, not SC30;
+  SC30 concerns payment by the client for buying a policy.
+- SC31: a question about available payment methods for an insurance policy.
+  If the client also asks to buy a policy, include both the purchase scenario
+  and SC31. "Қалай төлеуге болады?" asks how to pay and is a separate intent.
 - SC38: a suspicious caller, agent or message claims to represent us and asks for
   a transfer, a code or following a link. Treat "your agent" / "from you" as referring
   to Saqta even without its name. An unrelated scam with no insurance/company connection
@@ -120,6 +128,8 @@ Disambiguate by the requested service, not isolated insurance or company keyword
   A visa certificate request in Kazakh is SC39 without needing a policy reference.
   Actually obtaining a visa, a medical certificate or translating unrelated
   documents is outside our services. Buying travel insurance belongs to SC06.
+  A request for insurance needed to obtain a visa is SC06, not SC39; SC39
+  requires a request for a certificate or copy about an existing policy.
 
 Contrastive examples of the requested service (not additional client requests):
 - "Какие бумаги подать после кражи из дома?" -> [SC18].
@@ -127,6 +137,9 @@ Contrastive examples of the requested service (not additional client requests):
 - "Зарегистрируйте кражу из дома и назовите нужные документы" -> [SC14, SC18].
 - "Виза үшін саяхат сақтандыруын алғым келеді" -> [SC06].
 - "Елшілікке полисім туралы ағылшынша анықтама қажет" -> [SC39].
+- "Пришлите справку для посольства на английском" -> [SC39].
+- "Оформите полис для поездки. Какими способами его можно оплатить?" -> [SC06, SC31].
+- "Нужна страховка для отпуска и адрес вашего офиса в Алматы" -> [SC06, SC33].
 - "Сделайте справку, что я здоров, для консульства" -> [SYS_OUT_OF_SCOPE].
 - "Денсаулығым туралы анықтама керек, елшілікке апарамын" -> [SYS_OUT_OF_SCOPE].
 - "Меня обманули мошенники от имени банка, украли банковский код" -> [SYS_OUT_OF_SCOPE].
@@ -189,126 +202,6 @@ def route(utterance: str, state: DialogState) -> dict:
             temperature=0,
         )
         output = _normalize_output(json.loads(retry.choices[0].message.content))
-    output = _apply_certificate_boundary(utterance, output)
-    output = _apply_claim_document_boundary(utterance, output)
-    output = _apply_payment_method_boundary(utterance, output)
-    return _normalize_output(output)
-
-
-def _apply_certificate_boundary(utterance: str, output: dict) -> dict:
-    """Stabilize the narrow visa-certificate boundary after LLM routing."""
-    text = utterance.casefold()
-    has_visa_context = any(term in text for term in (
-        "виз", "посольств", "консульств", "елшілік", "visa", "embassy",
-    ))
-    has_certificate_request = any(term in text for term in (
-        "справк", "анықтама", "certificate",
-    ))
-    if (
-        not has_visa_context
-        or not has_certificate_request
-        or len(output["scenarios"]) != 1
-    ):
-        return output
-
-    asks_for_non_insurance_certificate = any(term in text for term in (
-        "медицинская справк", "медициналық анықтама", "справка о здоров",
-        "состояни здоровья", "денсаулық туралы анықтама",
-        "health certificate", "medical certificate",
-        "с работы", "о доход", "банковская справк", "справка из банк",
-        "о несудимости", "employment certificate",
-        "police certificate",
-    ))
-    target_id = "SYS_OUT_OF_SCOPE" if asks_for_non_insurance_certificate else "SC39"
-    conflicting_ids = (
-        {"SC39"}
-        if asks_for_non_insurance_certificate
-        else {"SYS_OUT_OF_SCOPE", "SYS_UNCLEAR"}
-    )
-
-    scenarios = [
-        item for item in output["scenarios"]
-        if item["scenario_id"] not in conflicting_ids
-    ]
-    if not any(item["scenario_id"] == target_id for item in scenarios):
-        scenarios.append({
-            "scenario_id": target_id,
-            "confidence": 0.95,
-            "reason": (
-                "Медицинские справки не входят в услуги Saqta."
-                if asks_for_non_insurance_certificate
-                else "Страховая справка для визы/посольства относится к SC39."
-            ),
-        })
-    output["scenarios"] = scenarios
-    return output
-
-
-def _apply_claim_document_boundary(utterance: str, output: dict) -> dict:
-    """Do not turn damage context into a second claim-registration request."""
-    text = utterance.casefold()
-    asks_about_documents = (
-        any(term in text for term in ("документ", "бумаг", "құжат", "қағаз"))
-        and any(term in text for term in (
-            "нуж", "какие", "куда", "как ", "подат", "отправ", "собрат",
-            "керек", "қайда", "қалай", "жібер", "жина",
-        ))
-    )
-    explicitly_registers_claim = any(term in text for term in (
-        "зарегистр", "оформить страховой случай", "подать заявление",
-        "хочу заявить", "заявить о", "сообщить о",
-        "тірке", "өтініш бер", "что делать", "не істей", "what should i do",
-    ))
-    routed_ids = [item["scenario_id"] for item in output["scenarios"]]
-    routed_to_claim_boundary = "SC18" in routed_ids or routed_ids == ["SC14"]
-    if not asks_about_documents or explicitly_registers_claim or not routed_to_claim_boundary:
-        return output
-
-    scenarios = [
-        item for item in output["scenarios"]
-        if item["scenario_id"] != "SC14"
-    ]
-    if not any(item["scenario_id"] == "SC18" for item in scenarios):
-        scenarios.append({
-            "scenario_id": "SC18",
-            "confidence": 0.95,
-            "reason": "Клиент спрашивает, какие документы нужны по заявлению.",
-        })
-    output["scenarios"] = scenarios
-    return output
-
-
-def _apply_payment_method_boundary(utterance: str, output: dict) -> dict:
-    """Preserve an explicit policy-payment question as a separate intent."""
-    text = utterance.casefold()
-    mentions_insurance = any(term in text for term in (
-        "страхов", "полис", "сақтандыр", "insurance", "policy",
-    ))
-    asks_how_to_pay = any(term in text for term in (
-        "как оплат", "чем оплат", "способ оплаты", "способы оплаты",
-        "қалай төле", "төлем тәсіл", "how can i pay", "payment method",
-    ))
-    mentions_unrelated_payment = any(term in text for term in (
-        "коммунал", "штраф", "налог", "кредит", "аренд",
-        "utility", "fine", "tax", "loan", "rent",
-    ))
-    has_supported_route = any(
-        not item["scenario_id"].startswith("SYS_")
-        for item in output["scenarios"]
-    )
-    if (
-        not mentions_insurance
-        or not asks_how_to_pay
-        or mentions_unrelated_payment
-        or not has_supported_route
-    ):
-        return output
-    if not any(item["scenario_id"] == "SC31" for item in output["scenarios"]):
-        output["scenarios"].append({
-            "scenario_id": "SC31",
-            "confidence": 0.95,
-            "reason": "Клиент прямо спрашивает, как оплатить страховой полис.",
-        })
     return output
 
 

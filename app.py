@@ -280,8 +280,10 @@ def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
         st.session_state.awaiting_slots = scenario_id
         missing = result.get("slots", [])
         prompts = {slot["name"]: slot.get("prompt", {}) for slot in slots_catalog()["slots"]}
-        fallback = "Сұрау деректерін нақтылаңызшы." if kk else "Уточните, пожалуйста, данные запроса."
-        return " ".join(prompts.get(name, {}).get(state.response_language, fallback) for name in missing[:1])
+        language = "kk" if kk else "ru"
+        questions = [prompts.get(name, {}).get(language, name) for name in missing]
+        opening = scenario.get("responses", {}).get(language, {}).get("opening", "") if scenario_id == "SC11" else ""
+        return " ".join(part for part in (opening, *questions) if part)
 
     if status == "need_confirmation":
         st.session_state.needs_localization = True

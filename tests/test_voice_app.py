@@ -113,11 +113,12 @@ class VoiceAppTests(unittest.TestCase):
         self.assertEqual(app.session_state.state.response_language, "ru")
         self.speak.assert_called_with(reply, "ru")
 
-    def test_multiple_missing_slots_ask_one_catalog_question(self):
+    def test_multiple_missing_slots_ask_catalog_questions(self):
         self.route.return_value = routed("kk", "SC01")
         app = self._app()
         reply = self._type(app, "Көлікке міндетті сақтандыру бағасы қандай?")
-        self.assertEqual(reply, next(s["prompt"]["kk"] for s in slots_catalog()["slots"] if s["name"] == "region"))
+        region_prompt = next(s["prompt"]["kk"] for s in slots_catalog()["slots"] if s["name"] == "region")
+        self.assertIn(region_prompt, reply)
 
     def test_typed_cancellation_consumes_simultaneous_audio_without_replaying_it(self):
         self.route.return_value = routed("ru", "SC29", {
