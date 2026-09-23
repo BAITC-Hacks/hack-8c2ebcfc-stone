@@ -66,6 +66,22 @@ class AppReview(unittest.TestCase):
         self.assertIsNone(app.session_state.awaiting_confirmation)
         self.assertNotEqual(app.session_state.state.mock_data["clients"][0]["email"], "new@mail.example")
 
+    def test_new_coverage_intent_replaces_pending_identification(self):
+        def route(text, _state):
+            if "терапевтке" in text:
+                return self._route(["SC21"], {"doctor_specialty": "therapist"})
+            return self._route(["SC22"], {"service_name": "МРТ"})
+        router.route = route
+        app = AppTest.from_file(APP).run(timeout=20)
+        app.chat_input[0].set_value("Маған ДМС бойынша терапевтке жазылу керек").run(timeout=20)
+        self.assertEqual(app.session_state.awaiting_identification, "SC21")
+        app.chat_input[0].set_value("Менің полисім бойынша МРТ покрывается ма?").run(timeout=20)
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state.awaiting_identification, "SC22")
+        self.assertEqual(app.session_state.last_trace["scenarios"][0]["scenario_id"], "SC22")
+        self.assertIn("ЖСН", app.session_state.messages[-1]["text"])
+        self.assertNotIn("Не нашла клиента", app.session_state.messages[-1]["text"])
+
     def test_sms_retry_only_sends_sms(self):
         router.route = lambda *_: self.fail("router must not re-run the scenario for SMS retry")
         app = AppTest.from_file(APP).run(timeout=20)

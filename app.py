@@ -147,25 +147,32 @@ def _closing_message(scenario: dict, state: DialogState, executed_actions: list[
 def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
     status = result.get("status")
     scenario = scenario_by_id(scenario_id) or {}
+    kk = state.language == "kk"
     st.session_state.turn_actions.extend(result.get("actions", []))
 
     if status == "need_identification":
         st.session_state.awaiting_identification = scenario_id
-        return "Для этой операции нужно вас идентифицировать. Назовите, пожалуйста, номер телефона или ИИН."
+        return (
+            "Бұл сұрау үшін жеке басыңызды растау қажет. Телефон нөміріңізді немесе ЖСН-іңізді айтыңызшы."
+            if kk else
+            "Для этой операции нужно вас идентифицировать. Назовите, пожалуйста, номер телефона или ИИН."
+        )
 
     if status == "need_slots":
         st.session_state.awaiting_slots = scenario_id
         missing = result.get("slots", [])
-        return "Уточните, пожалуйста: " + ", ".join(missing)
+        return ("Нақтылаңызшы: " if kk else "Уточните, пожалуйста: ") + ", ".join(missing)
 
     if status == "need_confirmation":
         st.session_state.awaiting_slots = None
         st.session_state.awaiting_confirmation = scenario_id
+        if kk:
+            return f"Тексеріңізші: {result.get('confirmation', 'операция мәліметтері')}. Растайсыз ба? (иә/жоқ)"
         return f"Проверьте, пожалуйста: {result.get('confirmation', 'детали операции')}. Подтверждаете? (да/нет)"
 
     if status == "confirmation_expired":
         st.session_state.awaiting_confirmation = None
-        return "Данные операции изменились. Уточним их и запросим подтверждение заново."
+        return "Операция деректері өзгерді. Оларды нақтылап, қайта растауды сұраймын." if kk else "Данные операции изменились. Уточним их и запросим подтверждение заново."
 
     if status == "action_error":
         return (
@@ -212,6 +219,12 @@ with chat_col:
             or st.session_state.awaiting_slots
         )
         interruption = _interruption(user_input) if waiting else None
+        identity_candidate = _extract_identity(user_input) if st.session_state.awaiting_identification else {}
+        if st.session_state.awaiting_identification and not identity_candidate and not interruption:
+            previous = st.session_state.awaiting_identification
+            st.session_state.awaiting_identification = None
+            state.scenario_stack.append(previous)
+            state.active_scenario = None
         declined_confirmation = bool(interruption == "cancel" and st.session_state.awaiting_confirmation)
 
         if interruption in ("operator", "cancel", "urgent"):
@@ -258,7 +271,7 @@ with chat_col:
 
         elif st.session_state.awaiting_identification:
             scenario_id = st.session_state.awaiting_identification
-            ident = _extract_identity(user_input)
+            ident = identity_candidate
             try:
                 if ident.get("phone") or ident.get("iin"):
                     found = call_action("find_client", _store=state.mock_data, **ident)
@@ -281,7 +294,11 @@ with chat_col:
                 result = run_scenario(scenario_id, state)
                 reply = handle_result(scenario_id, result, state)
             except ActionError:
-                reply = "Не нашла клиента с такими данными. Повторите телефон или ИИН, пожалуйста."
+                reply = (
+                    "Бұл деректер бойынша клиент табылмады. Телефон нөмірін немесе ЖСН-ді қайта айтыңызшы."
+                    if state.language == "kk" else
+                    "Не нашла клиента с такими данными. Повторите телефон или ИИН, пожалуйста."
+                )
 
         elif st.session_state.awaiting_confirmation:
             scenario_id = st.session_state.awaiting_confirmation
