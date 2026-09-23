@@ -42,7 +42,7 @@ class RouterTests(unittest.TestCase):
         catalog_prompt = request["messages"][0]["content"]
         prompt = request["messages"][1]["content"]
         self.assertIn("Қай дәрігерге және қай күнге?", prompt)
-        self.assertIn('"kk":', catalog_prompt)
+        self.assertIn("Сақтандыру бойынша терапевтке жазып қойыңызшы", catalog_prompt)
         self.assertIn("doctor_specialty", catalog_prompt)
         self.assertIn("active_scenario=SC21", prompt)
 
