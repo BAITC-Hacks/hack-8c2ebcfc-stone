@@ -4,3 +4,6 @@ node_modules/
 .venv/
 *.pyc
 .DS_Store
+predictions.json
+data/case_2/voice_router_dataset.zip
+data/voice_router_dataset.zip
