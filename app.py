@@ -1,3 +1,5 @@
+import hashlib
+import io
 import re
 import time
 
@@ -8,12 +10,78 @@ from backend.confirmation import classify_confirmation
 from backend.data_loader import scenario_by_id
 from backend.decision_policy import decide
 from backend.executor import run_scenario
-from backend.router import route
+from backend.router import _get_client, route
 from backend.slot_normalization import normalize_slot
 from backend.state import DialogState
 from backend.triage import detect_language, detect_urgency, normalize_phone
 
-st.set_page_config(page_title="Saqta Voice Router", layout="wide")
+st.set_page_config(page_title="Saqta Voice Router", layout="wide", page_icon="🎙️")
+
+st.markdown(
+    """
+    <style>
+    :root {
+        --saqta-primary: #0f766e;
+        --saqta-primary-dim: #134e4a;
+        --saqta-accent: #f59e0b;
+    }
+    .block-container { padding-top: 2rem; max-width: 1200px; }
+    h1 { font-size: 1.9rem !important; letter-spacing: -0.01em; }
+    .saqta-subtitle { color: #94a3b8; font-size: 0.95rem; margin-top: -0.6rem; margin-bottom: 1.2rem; }
+    div[data-testid="stChatMessage"] {
+        border-radius: 14px;
+        padding: 0.3rem 0.2rem;
+    }
+    .trace-card {
+        background: rgba(15, 118, 110, 0.08);
+        border: 1px solid rgba(15, 118, 110, 0.35);
+        border-radius: 12px;
+        padding: 14px 16px;
+        margin-bottom: 10px;
+    }
+    .trace-empty {
+        color: #94a3b8;
+        font-size: 0.9rem;
+        padding: 10px 2px;
+    }
+    .sc-badge {
+        display: inline-block;
+        background: var(--saqta-primary);
+        color: white;
+        font-weight: 600;
+        font-size: 0.82rem;
+        padding: 3px 10px;
+        border-radius: 999px;
+        margin: 2px 4px 2px 0;
+    }
+    .sc-badge.alt { background: rgba(148,163,184,0.25); color: #cbd5e1; }
+    .conf-bar-track { background: rgba(148,163,184,0.2); border-radius: 999px; height: 6px; margin: 4px 0 10px; }
+    .conf-bar-fill { background: var(--saqta-accent); border-radius: 999px; height: 6px; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+_KK_PROMPT_BIAS = (
+    "Сақтандыру компаниясының байланыс орталығы. Сөйлеу қазақша, орысша немесе "
+    "аралас болуы мүмкін. ОГПО, КАСКО, ДМС, полис, өтініш, сақтандыру."
+)
+
+
+def transcribe(audio_file) -> tuple[str, float]:
+    t0 = time.perf_counter()
+    resp = _get_client().audio.transcriptions.create(
+        model="gpt-4o-transcribe",
+        file=("speech.wav", audio_file.getvalue(), "audio/wav"),
+        prompt=_KK_PROMPT_BIAS,
+    )
+    return resp.text, (time.perf_counter() - t0) * 1000
+
+
+def speak(text: str) -> tuple[bytes, float]:
+    t0 = time.perf_counter()
+    resp = _get_client().audio.speech.create(model="tts-1", voice="alloy", input=text)
+    return resp.content, (time.perf_counter() - t0) * 1000
 
 if "state" not in st.session_state:
     st.session_state.state = DialogState()
@@ -30,7 +98,12 @@ if "awaiting_slots" not in st.session_state:
 if "queued_scenarios" not in st.session_state:
     st.session_state.queued_scenarios = []
 
-st.title("Saqta Insurance — Voice Router")
+st.title("🎙️ Saqta Insurance — Voice Router")
+st.markdown(
+    '<div class="saqta-subtitle">LLM-слой выбора сценария вместо intent-классификатора · '
+    'RU / KK / смешанная речь</div>',
+    unsafe_allow_html=True,
+)
 
 IIN_RE = re.compile(r"\b\d{12}\b")
 CLAIM_RE = re.compile(r"\bCL-\d{6}\b", re.IGNORECASE)
@@ -194,6 +267,15 @@ def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
     return str(result)
 
 
+if "last_audio_hash" not in st.session_state:
+    st.session_state.last_audio_hash = None
+if "stt_ms" not in st.session_state:
+    st.session_state.stt_ms = 0.0
+if "tts_ms" not in st.session_state:
+    st.session_state.tts_ms = 0.0
+if "last_reply_audio" not in st.session_state:
+    st.session_state.last_reply_audio = None
+
 chat_col, trace_col = st.columns([2, 1])
 
 with chat_col:
@@ -201,11 +283,28 @@ with chat_col:
         with st.chat_message(m["role"]):
             st.write(m["text"])
 
-    user_input = st.chat_input("Скажите что-нибудь клиенту...")
+    if st.session_state.last_reply_audio:
+        st.audio(st.session_state.last_reply_audio, format="audio/mp3", autoplay=True)
+
+    audio_value = st.audio_input("Говорите с клиентом (микрофон)")
+    typed_input = st.chat_input("...или напишите текстом")
+
+    user_input = None
+    st.session_state.stt_ms = 0.0
+    if audio_value is not None:
+        audio_hash = hashlib.sha256(audio_value.getvalue()).hexdigest()
+        if audio_hash != st.session_state.last_audio_hash:
+            st.session_state.last_audio_hash = audio_hash
+            with st.spinner("Распознаю речь..."):
+                user_input, stt_ms = transcribe(audio_value)
+            st.session_state.stt_ms = stt_ms
+    if typed_input:
+        user_input = typed_input
 
     if user_input:
         state = st.session_state.state
         st.session_state.turn_actions = []
+        st.session_state.last_reply_audio = None
         st.session_state.messages.append({"role": "user", "text": user_input})
         state.language = detect_language(user_input)
 
@@ -364,6 +463,15 @@ with chat_col:
                 reply = "Соединяю вас с оператором."
                 st.session_state.low_confidence_streak = 0
 
+        t_router = time.perf_counter() - t0
+
+        try:
+            audio_bytes, tts_ms = speak(reply)
+            st.session_state.last_reply_audio = audio_bytes
+        except Exception:
+            tts_ms = 0.0
+            st.session_state.last_reply_audio = None
+
         t_total = time.perf_counter() - t0
 
         state.record_turn("client", user_input)
@@ -380,10 +488,73 @@ with chat_col:
             "decision": decision_action,
             "slots": state.slots,
             "actions": st.session_state.turn_actions,
-            "latency_ms": {"total": round(t_total * 1000, 1)},
+            "latency_ms": {
+                "stt": round(st.session_state.stt_ms, 1),
+                "router": round(t_router * 1000, 1),
+                "tts_first_audio": round(tts_ms, 1),
+                "total": round(t_total * 1000, 1),
+            },
         }
         st.rerun()
 
 with trace_col:
-    st.subheader("Trace panel")
-    st.json(st.session_state.get("last_trace", {}))
+    st.subheader("📋 Trace panel")
+    st.caption("Что решил роутер и почему — видно супервизору после каждой реплики")
+
+    trace = st.session_state.get("last_trace", {})
+
+    if not trace:
+        st.markdown(
+            '<div class="trace-empty">Пока нет ни одной реплики — скажите что-нибудь клиенту слева.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        lang_label = {"ru": "🇷🇺 русский", "kk": "🇰🇿 қазақша", "mixed": "🇷🇺🇰🇿 смешанный"}.get(
+            trace.get("language"), trace.get("language", "—")
+        )
+        st.markdown(f"**Реплика #{trace.get('turn', '—')}** · {lang_label}")
+        if trace.get("transcript"):
+            st.markdown(f"> {trace['transcript']}")
+
+        scenarios = trace.get("scenarios") or []
+        if scenarios:
+            badges = "".join(
+                f'<span class="sc-badge">{s.get("scenario_id")} '
+                f'({round((s.get("confidence") or 0) * 100)}%)</span>'
+                for s in scenarios
+            )
+            st.markdown(f"**Выбрано:** {badges}", unsafe_allow_html=True)
+            top_conf = round((scenarios[0].get("confidence") or 0) * 100)
+            st.markdown(
+                f'<div class="conf-bar-track"><div class="conf-bar-fill" '
+                f'style="width:{top_conf}%"></div></div>',
+                unsafe_allow_html=True,
+            )
+            reasons = [r for r in trace.get("reason", []) if r]
+            if reasons:
+                st.caption("Почему: " + " · ".join(reasons))
+
+        alternatives = trace.get("alternatives") or []
+        if alternatives:
+            alt_badges = "".join(
+                f'<span class="sc-badge alt">{a.get("scenario_id")} '
+                f'({round((a.get("confidence") or 0) * 100)}%)</span>'
+                for a in alternatives
+            )
+            st.markdown(f"**Альтернативы:** {alt_badges}", unsafe_allow_html=True)
+
+        latency = trace.get("latency_ms") or {}
+        if latency:
+            cols = st.columns(len(latency))
+            for col, (stage, ms) in zip(cols, latency.items()):
+                col.metric(stage.replace("_", " ").upper(), f"{ms:.0f} мс")
+
+        if trace.get("slots"):
+            with st.expander("Слоты"):
+                st.json(trace["slots"])
+        if trace.get("actions"):
+            with st.expander("Выполненные действия"):
+                st.json(trace["actions"])
+
+        with st.expander("Сырой trace (JSON)"):
+            st.json(trace)
