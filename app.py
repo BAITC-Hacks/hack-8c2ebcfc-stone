@@ -37,14 +37,14 @@ st.markdown(
         background: var(--halyk-green-dark);
         color: white;
         border-radius: 12px;
-        padding: 26px 32px;
-        margin-bottom: 24px;
+        padding: 40px 44px;
+        margin-bottom: 28px;
         display: flex;
         flex-wrap: wrap;
-        row-gap: 10px;
+        row-gap: 12px;
         align-items: center;
         justify-content: space-between;
-        font-size: 1.15rem;
+        font-size: 1.45rem;
         font-weight: 500;
         letter-spacing: 0.01em;
         line-height: 1.4;
