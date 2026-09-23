@@ -30,6 +30,7 @@ def _scenario_catalog_prompt() -> str:
         lines.append(
             f"{s['scenario_id']} ({s['domain']}/{s['category']}, priority={s['priority']}): "
             f"{s['description']}"
+            f" | examples: {json.dumps({lang: values[:2] for lang, values in s.get('examples', {}).items()}, ensure_ascii=False)}"
             + (f" | not this if: {not_this_if}" if not_this_if else "")
         )
     return "\n".join(lines)
