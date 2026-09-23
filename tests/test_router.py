@@ -12,6 +12,18 @@ def item(scenario_id, confidence=0.9):
 
 
 class RouterTests(unittest.TestCase):
+    @patch("backend.router._get_client")
+    def test_invalid_empty_reply_is_retried(self, get_client):
+        create = get_client.return_value.chat.completions.create
+        create.side_effect = [
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='{"scenarios":[]}'))]),
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps({
+                "scenarios": [item("SC25")], "slots": {}, "is_continuation": False,
+            })))]),
+        ]
+        self.assertEqual(route("Проверьте полис", DialogState())["scenarios"][0]["scenario_id"], "SC25")
+        self.assertEqual(create.call_count, 2)
+
     def test_urgent_first_preserves_other_requests_and_order(self):
         output = _normalize_output({"scenarios": [item("SC27"), item("SC11"), item("SC04")]})
         self.assertEqual([s["scenario_id"] for s in output["scenarios"]], ["SC11", "SC27", "SC04"])

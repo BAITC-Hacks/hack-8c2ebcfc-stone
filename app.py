@@ -302,7 +302,13 @@ with chat_col:
         else:
             if st.session_state.awaiting_slots:
                 state.active_scenario = st.session_state.awaiting_slots
-            router_output = route(user_input, state)
+            try:
+                router_output = route(user_input, state)
+            except (ValueError, KeyError, TypeError):
+                router_output = {
+                    "scenarios": [{"scenario_id": "SYS_UNCLEAR", "confidence": 1.0, "reason": "router validation failed"}],
+                    "alternatives": [], "slots": {}, "is_continuation": False,
+                }
             for slot_name, slot_value in router_output.get("slots", {}).items():
                 normalized = normalize_slot(slot_name, slot_value)
                 if normalized is not None:

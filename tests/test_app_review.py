@@ -58,6 +58,14 @@ class AppReview(unittest.TestCase):
         self.assertIsNone(app.session_state.awaiting_confirmation)
         self.assertIn("оператором", app.session_state.messages[-1]["text"])
 
+    def test_urgent_request_interrupts_confirmation(self):
+        app = self._contact_preview()
+        router.route = lambda *_: self._route(["SC38"], {"fraud_details": "мошенник просил код"})
+        app.chat_input[0].set_value("Мошенник попросил код карты").run(timeout=20)
+        self.assertFalse(app.exception)
+        self.assertIsNone(app.session_state.awaiting_confirmation)
+        self.assertNotEqual(app.session_state.state.mock_data["clients"][0]["email"], "new@mail.example")
+
     def test_sms_retry_only_sends_sms(self):
         router.route = lambda *_: self.fail("router must not re-run the scenario for SMS retry")
         app = AppTest.from_file(APP).run(timeout=20)
@@ -77,6 +85,13 @@ class AppReview(unittest.TestCase):
         reply = app.session_state.messages[-1]["text"]
         self.assertIn("Abai", reply)
         self.assertIn("Могу помочь только", reply)
+
+    def test_kazakh_system_reply(self):
+        router.route = lambda *_: self._route(["SYS_OUT_OF_SCOPE"])
+        app = AppTest.from_file(APP).run(timeout=20)
+        app.chat_input[0].set_value("Мен несие алғым келеді").run(timeout=20)
+        self.assertFalse(app.exception)
+        self.assertIn("сақтандыру", app.session_state.messages[-1]["text"])
 
     def test_declining_confirmation_runs_next_intent(self):
         router.route = lambda *_: self._route(["SC29", "SC31"], {"contact_field": "email", "new_value": "new@mail.example"})

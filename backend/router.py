@@ -161,7 +161,22 @@ def route(utterance: str, state: DialogState) -> dict:
         response_format={"type": "json_object"},
         temperature=0,
     )
-    return _normalize_output(json.loads(resp.choices[0].message.content))
+    output = json.loads(resp.choices[0].message.content)
+    try:
+        return _normalize_output(output)
+    except ValueError:
+        retry = _get_client().chat.completions.create(
+            model=_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": json.dumps(output, ensure_ascii=False)},
+                {"role": "user", "content": "Your answer violated the contract. Return valid JSON with at least one allowed scenario ID and confidence between 0 and 1."},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        return _normalize_output(json.loads(retry.choices[0].message.content))
 
 
 def _normalize_output(output: dict) -> dict:
