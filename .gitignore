@@ -7,3 +7,12 @@ node_modules/
 predictions.json
 data/case_2/voice_router_dataset.zip
 data/voice_router_dataset.zip
+
+.handoff/
+.handoff-runtime/
+.postman/
+AGENTS.md
+CLAUDE.md
+PROJECT.md
+
+postman/
