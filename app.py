@@ -17,48 +17,91 @@ from backend.slot_normalization import normalize_slot
 from backend.state import DialogState
 from backend.triage import detect_urgency, normalize_phone
 
-st.set_page_config(page_title="Saqta Voice Router", layout="wide", page_icon="🎙️")
+st.set_page_config(page_title="Saqta Voice Router", layout="wide")
 
 st.markdown(
     """
     <style>
     :root {
-        --saqta-primary: #0f766e;
-        --saqta-primary-dim: #134e4a;
-        --saqta-accent: #f59e0b;
+        --halyk-green: #1E7145;
+        --halyk-green-dark: #145032;
+        --ink: #16211B;
+        --ink-soft: #4B5A52;
+        --hairline: #E1E8E3;
+        --surface: #F4F8F5;
     }
-    .block-container { padding-top: 2rem; max-width: 1200px; }
-    h1 { font-size: 1.9rem !important; letter-spacing: -0.01em; }
-    .saqta-subtitle { color: #94a3b8; font-size: 0.95rem; margin-top: -0.6rem; margin-bottom: 1.2rem; }
+    .block-container { padding-top: 3.2rem; max-width: 1200px; }
+    h1 { font-size: 1.85rem !important; letter-spacing: -0.01em; color: var(--ink); }
+
+    .halyk-banner {
+        background: var(--halyk-green-dark);
+        color: white;
+        border-radius: 12px;
+        padding: 26px 32px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        row-gap: 10px;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 1.15rem;
+        font-weight: 500;
+        letter-spacing: 0.01em;
+        line-height: 1.4;
+    }
+    .halyk-banner span.tag {
+        background: rgba(255,255,255,0.22);
+        padding: 6px 16px;
+        border-radius: 999px;
+        font-weight: 700;
+        font-size: 0.95rem;
+    }
+    .saqta-subtitle { color: var(--ink-soft); font-size: 0.97rem; margin-top: 0.1rem; margin-bottom: 1.4rem; }
+
     div[data-testid="stChatMessage"] {
         border-radius: 14px;
-        padding: 0.3rem 0.2rem;
+        border: 1px solid var(--hairline);
+        padding: 0.35rem 0.6rem;
+        margin-bottom: 4px;
     }
+
     .trace-card {
-        background: rgba(15, 118, 110, 0.08);
-        border: 1px solid rgba(15, 118, 110, 0.35);
+        background: var(--surface);
+        border: 1px solid var(--hairline);
+        border-left: 4px solid var(--halyk-green);
         border-radius: 12px;
         padding: 14px 16px;
         margin-bottom: 10px;
     }
     .trace-empty {
-        color: #94a3b8;
+        color: var(--ink-soft);
         font-size: 0.9rem;
         padding: 10px 2px;
     }
     .sc-badge {
         display: inline-block;
-        background: var(--saqta-primary);
+        background: var(--halyk-green-dark);
         color: white;
-        font-weight: 600;
+        font-weight: 700;
         font-size: 0.82rem;
-        padding: 3px 10px;
+        padding: 3px 12px;
         border-radius: 999px;
         margin: 2px 4px 2px 0;
+        letter-spacing: 0.01em;
     }
-    .sc-badge.alt { background: rgba(148,163,184,0.25); color: #cbd5e1; }
-    .conf-bar-track { background: rgba(148,163,184,0.2); border-radius: 999px; height: 6px; margin: 4px 0 10px; }
-    .conf-bar-fill { background: var(--saqta-accent); border-radius: 999px; height: 6px; }
+    .sc-badge.alt { background: var(--surface); color: var(--ink-soft); border: 1px solid var(--hairline); }
+    .lang-badge {
+        display: inline-block;
+        border: 1px solid var(--halyk-green);
+        color: var(--halyk-green-dark);
+        font-weight: 700;
+        font-size: 0.75rem;
+        padding: 1px 9px;
+        border-radius: 6px;
+        letter-spacing: 0.04em;
+    }
+    .conf-bar-track { background: var(--hairline); border-radius: 999px; height: 6px; margin: 6px 0 10px; }
+    .conf-bar-fill { background: var(--halyk-green); border-radius: 999px; height: 6px; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -79,13 +122,33 @@ if "awaiting_slots" not in st.session_state:
 if "queued_scenarios" not in st.session_state:
     st.session_state.queued_scenarios = []
 
-st.title("🎙️ Saqta Insurance — Voice Router")
+st.markdown(
+    '<div class="halyk-banner">'
+    '<span>Трек «Коммуникации» · Партнёр задачи — АО «Народный Банк Казахстана»</span>'
+    '<span class="tag">HackAlem AI</span>'
+    '</div>',
+    unsafe_allow_html=True,
+)
+st.title("Saqta Insurance — Voice Router")
 st.markdown(
     '<div class="saqta-subtitle">LLM-слой выбора сценария вместо intent-классификатора · '
-    'RU / KK / смешанная речь</div>',
+    'русский / қазақша / смешанная речь</div>',
     unsafe_allow_html=True,
 )
 st.caption("AI дауысы / Ответы озвучены искусственным голосом")
+
+_DEMO_LANG_OPTIONS = {"Русский": "ru", "Қазақша": "kk"}
+demo_lang_label = st.radio(
+    "Язык по умолчанию для демо",
+    options=list(_DEMO_LANG_OPTIONS.keys()),
+    horizontal=True,
+    key="demo_lang_label",
+)
+demo_lang = _DEMO_LANG_OPTIONS[demo_lang_label]
+if st.session_state.get("_applied_demo_lang") != demo_lang and st.session_state.state.turn == 0:
+    st.session_state.state.language = demo_lang
+    st.session_state.state.response_language = demo_lang
+    st.session_state["_applied_demo_lang"] = demo_lang
 
 IIN_RE = re.compile(r"\b\d{12}\b")
 CLAIM_RE = re.compile(r"\bCL-\d{6}\b", re.IGNORECASE)
@@ -553,7 +616,7 @@ with chat_col:
         st.rerun()
 
 with trace_col:
-    st.subheader("📋 Trace panel")
+    st.subheader("Trace panel")
     st.caption("Что решил роутер и почему — видно супервизору после каждой реплики")
 
     trace = st.session_state.get("last_trace", {})
@@ -564,10 +627,14 @@ with trace_col:
             unsafe_allow_html=True,
         )
     else:
-        lang_label = {"ru": "🇷🇺 русский", "kk": "🇰🇿 қазақша", "mixed": "🇷🇺🇰🇿 смешанный"}.get(
-            trace.get("language"), trace.get("language", "—")
+        lang_label = {"ru": "RU", "kk": "KK", "mixed": "RU+KK"}.get(
+            trace.get("language"), (trace.get("language") or "—").upper()
         )
-        st.markdown(f"**Реплика #{trace.get('turn', '—')}** · {lang_label}")
+        st.markdown(
+            f"**Реплика #{trace.get('turn', '—')}** &nbsp; "
+            f'<span class="lang-badge">{lang_label}</span>',
+            unsafe_allow_html=True,
+        )
         st.caption("Язык ответа: " + str(trace.get("response_language", "—")))
         if trace.get("transcript"):
             st.markdown(f"> {trace['transcript']}")

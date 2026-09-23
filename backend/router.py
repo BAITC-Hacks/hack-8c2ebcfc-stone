@@ -59,7 +59,9 @@ def _enum_slot_hints() -> str:
 
 SYSTEM_PROMPT = """You are the scenario router for Saqta Insurance's voice agent.
 Given a client utterance and dialog state, decide which scenario(s) apply.
-Reply ONLY with JSON matching this contract:
+Reply ONLY with JSON matching this contract. The "reason" field is read by a
+Russian-speaking human supervisor, not the client: always write it in Russian,
+in one short sentence, regardless of the client's language.
 {
   "scenarios": [{"scenario_id": "SCxx", "confidence": 0.0-1.0, "reason": "..."}],
   "alternatives": [{"scenario_id": "SCxx", "confidence": 0.0-1.0}],
@@ -233,9 +235,9 @@ def _apply_certificate_boundary(utterance: str, output: dict) -> dict:
             "scenario_id": target_id,
             "confidence": 0.95,
             "reason": (
-                "Medical health certificates are outside Saqta services."
+                "Медицинские справки не входят в услуги Saqta."
                 if asks_for_non_insurance_certificate
-                else "A visa or embassy insurance certificate is handled by SC39."
+                else "Страховая справка для визы/посольства относится к SC39."
             ),
         })
     output["scenarios"] = scenarios
@@ -270,7 +272,7 @@ def _apply_claim_document_boundary(utterance: str, output: dict) -> dict:
         scenarios.append({
             "scenario_id": "SC18",
             "confidence": 0.95,
-            "reason": "The client asks which claim documents are needed.",
+            "reason": "Клиент спрашивает, какие документы нужны по заявлению.",
         })
     output["scenarios"] = scenarios
     return output
@@ -305,7 +307,7 @@ def _apply_payment_method_boundary(utterance: str, output: dict) -> dict:
         output["scenarios"].append({
             "scenario_id": "SC31",
             "confidence": 0.95,
-            "reason": "The client explicitly asks how an insurance policy can be paid.",
+            "reason": "Клиент прямо спрашивает, как оплатить страховой полис.",
         })
     return output
 
