@@ -19,8 +19,12 @@ def main() -> None:
 
     for item in dev["utterances"] if "utterances" in dev else dev:
         state = DialogState()
-        output = route(item["text"], state)
-        scenario_ids = [s["scenario_id"] for s in output.get("scenarios", [])]
+        try:
+            output = route(item["text"], state)
+            scenario_ids = [s["scenario_id"] for s in output.get("scenarios", [])]
+        except (ValueError, KeyError) as e:
+            scenario_ids = ["SYS_UNCLEAR"]
+            print(item["id"], "-> ROUTER ERROR:", e)
         predictions[item["id"]] = scenario_ids or ["SYS_OUT_OF_SCOPE"]
         print(item["id"], "->", scenario_ids)
 
