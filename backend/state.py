@@ -10,6 +10,7 @@ class DialogState:
     slots: dict[str, str] = field(default_factory=dict)
     turn: int = 0
     history: list[dict] = field(default_factory=list)
+    pending_confirmation: dict | None = None
 
     def push_scenario(self, scenario_id: str) -> None:
         if self.active_scenario:
