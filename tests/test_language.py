@@ -95,10 +95,34 @@ class ConversationLanguageTests(unittest.TestCase):
                 update_language(state, text, language, response_language=inconsistent)
                 self.assertEqual((state.language, state.response_language), (language, language))
 
+    def test_clear_current_language_wins_over_incorrect_router_labels(self):
+        for text, expected in (
+            ("Добрый день! Сколько будет стоить обязательная страховка на машину?", "ru"),
+            ("Сақтандыру керек", "kk"),
+            ("Мен онлайн полис алсам бола ма", "kk"),
+        ):
+            for previous in ("ru", "kk", "mixed"):
+                for model_language in ("ru", "kk", "mixed"):
+                    with self.subTest(text=text, previous=previous, model=model_language):
+                        state = SimpleNamespace(language=previous, response_language="kk")
+                        update_language(state, text, model_language, response_language="kk")
+                        self.assertEqual((state.language, state.response_language), (expected, expected))
+
     def test_invalid_mixed_reply_language_falls_back_to_dominant_words(self):
         state = SimpleNamespace(language="ru", response_language="ru")
         update_language(state, "Здравствуйте, менің полисім бойынша сұрақ бар", "mixed", "en")
         self.assertEqual(state.response_language, "kk")
+
+    def test_sparse_local_evidence_preserves_model_code_switching(self):
+        for text, reply_language in (
+            ("Расскажите про сақтандыру", "ru"),
+            ("Добрый день, сақтандыру керек", "ru"),
+            ("Здравствуйте, полис жасату", "kk"),
+        ):
+            with self.subTest(text=text):
+                state = SimpleNamespace(language="ru", response_language="ru")
+                update_language(state, text, "mixed", reply_language)
+                self.assertEqual((state.language, state.response_language), ("mixed", reply_language))
 
     def test_neutral_identity_ignores_both_model_language_fields(self):
         state = SimpleNamespace(language="mixed", response_language="ru")
