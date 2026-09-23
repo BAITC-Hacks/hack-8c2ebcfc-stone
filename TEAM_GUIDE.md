@@ -48,8 +48,8 @@ mic → STT → Layer 1: Triage → Layer 2: LLM Router → Decision policy → 
 python3 predictions.py
 python3 data/case_2/voice_router_dataset/evaluate.py predictions.json data/case_2/voice_router_dataset/dev_utterances.json
 ```
-Последняя локальная проверка ветки `codex/router-boundary-fixes`: **104/104 на dev**
-(primary accuracy и full match), **22/24** на дополнительных граничных примерах.
+Последняя локальная проверка ветки `codex/router-final-boundaries`: **104/104 на dev**
+(primary accuracy и full match), **24/24** на дополнительных граничных примерах.
 Это результат настройки на известных наборах, не оценка скрытого теста.
 Методика, ограничения и оставшиеся ошибки — в [docs/router-quality.md](docs/router-quality.md).
 
@@ -73,9 +73,10 @@ predictions.py          — прогон dev_utterances.json → evaluate.py    
 
 ### Дария — "мозг" (язык + решение)
 - [x] `triage.py`, `router.py`, `decision_policy.py` — написаны
-- [x] Локальный dev-прогон после уточнения границ: 104/104, все 13 multi-intent сохранены; изменение ожидает коммита и PR
-- [ ] Дополнительные границы SC39: казахская справка для визы без упоминания страховки (B13), медицинская справка вне услуг страховщика (B16)
-- [ ] Не тюнить бесконечно — прогонять `evaluate.py` раз в 30 мин, остановиться на diminishing returns
+- [x] Локальный dev-прогон после уточнения границ: 104/104, все 13 multi-intent сохранены
+- [x] Дополнительные границы: 24/24, включая B13 и B16; изменение ожидает коммита и PR
+- [x] Пороги `decision_policy` покрыты unit-тестами: run, clarify, handoff и пустой результат
+- [x] Настройка на известных наборах завершена; следующий этап — интеграционные диалоги после PR Бекарыса
 
 ### Бекарыс — "тело" (состояние + выполнение + интерфейс)
 - [ ] Дописать оставшиеся 27 действий в `actions_mock.py` (образец — 4 готовых: `find_client`, `get_policies`, `get_policy`, `get_bm_class`)

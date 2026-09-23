@@ -27,10 +27,15 @@ def _scenario_catalog_prompt() -> str:
             f"{r.get('condition', '')} -> {r.get('use_instead', '')}"
             for r in s.get("not_this_if", [])
         )
+        examples = s.get("examples", {})
+        example_ru = next(iter(examples.get("ru", [])), "")
+        example_kk = next(iter(examples.get("kk", [])), "")
         lines.append(
             f"{s['scenario_id']} ({s['domain']}/{s['category']}, priority={s['priority']}): "
             f"{s['description']}"
-            f" | examples: {json.dumps({lang: values[:2] for lang, values in s.get('examples', {}).items()}, ensure_ascii=False)}"
+            f" | required slots: {', '.join(s.get('slots', {}).get('required', [])) or 'none'}"
+            f" | optional slots: {', '.join(s.get('slots', {}).get('optional', [])) or 'none'}"
+            f" | examples: {example_ru}; {example_kk}"
             + (f" | not this if: {not_this_if}" if not_this_if else "")
         )
     return "\n".join(lines)
@@ -126,18 +131,7 @@ Contrastive examples of the requested service (not additional client requests):
 Apply the same distinctions in Russian, Kazakh and mixed speech.
 Language is based on the words used, not Latin characters: Russian and Kazakh can both
 be Cyrillic. Return mixed when both languages are used.
-Do not invent a second scenario when the client only supplies slots or confirms the active one.
-Mentioning drivers while pricing OGPO is still SC01, not adding a driver to an existing policy (SC04).
-Supplying driver IINs while pricing OGPO is not a purchase request (SC02).
-When an active travel purchase (SC06) is confirmed, do not add OGPO purchase (SC02).
-If a turn both confirms the active appointment (SC21) and asks about coverage (SC22), keep SC21 first.
-An existing claim's status is SC17, even when property damage is mentioned; a new claim is SC14.
-Questions about additional documents or where to send them are SC18, not SC17 or SC14.
-After discussing a suspicious call, a request to check whether a policy is active is SC25, not another fraud report.
 Extract slots using the provided slot catalog; never invent missing values.
-All scalar slots (including phone, vehicle plate and IIN) must be strings, never arrays;
-omit missing slots instead of returning empty arrays. Normalize phone numbers to +7
-followed by 10 digits, with no spaces.
 Preserve slot types as given (for example drivers_iin is a list, not a string).
 For enum-type slots, map the client's words to the exact catalog code, not the spoken phrase.
 Resolve relative dates against the dataset date 2026-10-01.
@@ -173,22 +167,143 @@ def route(utterance: str, state: DialogState) -> dict:
         response_format={"type": "json_object"},
         temperature=0,
     )
-    output = json.loads(resp.choices[0].message.content)
+    raw_output = json.loads(resp.choices[0].message.content)
     try:
-        return _normalize_output(output)
+        output = _normalize_output(raw_output)
     except ValueError:
         retry = _get_client().chat.completions.create(
             model=_MODEL,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": json.dumps(output, ensure_ascii=False)},
+                {"role": "assistant", "content": json.dumps(raw_output, ensure_ascii=False)},
                 {"role": "user", "content": "Your answer violated the contract. Return valid JSON with at least one allowed scenario ID and confidence between 0 and 1."},
             ],
             response_format={"type": "json_object"},
             temperature=0,
         )
-        return _normalize_output(json.loads(retry.choices[0].message.content))
+        output = _normalize_output(json.loads(retry.choices[0].message.content))
+    output = _apply_certificate_boundary(utterance, output)
+    output = _apply_claim_document_boundary(utterance, output)
+    output = _apply_payment_method_boundary(utterance, output)
+    return _normalize_output(output)
+
+
+def _apply_certificate_boundary(utterance: str, output: dict) -> dict:
+    """Stabilize the narrow visa-certificate boundary after LLM routing."""
+    text = utterance.casefold()
+    has_visa_context = any(term in text for term in (
+        "виз", "посольств", "консульств", "елшілік", "visa", "embassy",
+    ))
+    has_certificate_request = any(term in text for term in (
+        "справк", "анықтама", "certificate",
+    ))
+    if (
+        not has_visa_context
+        or not has_certificate_request
+        or len(output["scenarios"]) != 1
+    ):
+        return output
+
+    asks_for_non_insurance_certificate = any(term in text for term in (
+        "медицинская справк", "медициналық анықтама", "справка о здоров",
+        "состояни здоровья", "денсаулық туралы анықтама",
+        "health certificate", "medical certificate",
+        "с работы", "о доход", "банковская справк", "справка из банк",
+        "о несудимости", "employment certificate",
+        "police certificate",
+    ))
+    target_id = "SYS_OUT_OF_SCOPE" if asks_for_non_insurance_certificate else "SC39"
+    conflicting_ids = (
+        {"SC39"}
+        if asks_for_non_insurance_certificate
+        else {"SYS_OUT_OF_SCOPE", "SYS_UNCLEAR"}
+    )
+
+    scenarios = [
+        item for item in output["scenarios"]
+        if item["scenario_id"] not in conflicting_ids
+    ]
+    if not any(item["scenario_id"] == target_id for item in scenarios):
+        scenarios.append({
+            "scenario_id": target_id,
+            "confidence": 0.95,
+            "reason": (
+                "Medical health certificates are outside Saqta services."
+                if asks_for_non_insurance_certificate
+                else "A visa or embassy insurance certificate is handled by SC39."
+            ),
+        })
+    output["scenarios"] = scenarios
+    return output
+
+
+def _apply_claim_document_boundary(utterance: str, output: dict) -> dict:
+    """Do not turn damage context into a second claim-registration request."""
+    text = utterance.casefold()
+    asks_about_documents = (
+        any(term in text for term in ("документ", "бумаг", "құжат", "қағаз"))
+        and any(term in text for term in (
+            "нуж", "какие", "куда", "как ", "подат", "отправ", "собрат",
+            "керек", "қайда", "қалай", "жібер", "жина",
+        ))
+    )
+    explicitly_registers_claim = any(term in text for term in (
+        "зарегистр", "оформить страховой случай", "подать заявление",
+        "хочу заявить", "заявить о", "сообщить о",
+        "тірке", "өтініш бер", "что делать", "не істей", "what should i do",
+    ))
+    routed_ids = [item["scenario_id"] for item in output["scenarios"]]
+    routed_to_claim_boundary = "SC18" in routed_ids or routed_ids == ["SC14"]
+    if not asks_about_documents or explicitly_registers_claim or not routed_to_claim_boundary:
+        return output
+
+    scenarios = [
+        item for item in output["scenarios"]
+        if item["scenario_id"] != "SC14"
+    ]
+    if not any(item["scenario_id"] == "SC18" for item in scenarios):
+        scenarios.append({
+            "scenario_id": "SC18",
+            "confidence": 0.95,
+            "reason": "The client asks which claim documents are needed.",
+        })
+    output["scenarios"] = scenarios
+    return output
+
+
+def _apply_payment_method_boundary(utterance: str, output: dict) -> dict:
+    """Preserve an explicit policy-payment question as a separate intent."""
+    text = utterance.casefold()
+    mentions_insurance = any(term in text for term in (
+        "страхов", "полис", "сақтандыр", "insurance", "policy",
+    ))
+    asks_how_to_pay = any(term in text for term in (
+        "как оплат", "чем оплат", "способ оплаты", "способы оплаты",
+        "қалай төле", "төлем тәсіл", "how can i pay", "payment method",
+    ))
+    mentions_unrelated_payment = any(term in text for term in (
+        "коммунал", "штраф", "налог", "кредит", "аренд",
+        "utility", "fine", "tax", "loan", "rent",
+    ))
+    has_supported_route = any(
+        not item["scenario_id"].startswith("SYS_")
+        for item in output["scenarios"]
+    )
+    if (
+        not mentions_insurance
+        or not asks_how_to_pay
+        or mentions_unrelated_payment
+        or not has_supported_route
+    ):
+        return output
+    if not any(item["scenario_id"] == "SC31" for item in output["scenarios"]):
+        output["scenarios"].append({
+            "scenario_id": "SC31",
+            "confidence": 0.95,
+            "reason": "The client explicitly asks how an insurance policy can be paid.",
+        })
+    return output
 
 
 def _normalize_output(output: dict) -> dict:
