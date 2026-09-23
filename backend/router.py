@@ -20,11 +20,15 @@ def _scenario_catalog_prompt() -> str:
             f"{r.get('condition', '')} -> {r.get('use_instead', '')}"
             for r in s.get("not_this_if", [])
         )
+        examples = s.get("examples", {})
+        example_ru = next(iter(examples.get("ru", [])), "")
+        example_kk = next(iter(examples.get("kk", [])), "")
         lines.append(
             f"{s['scenario_id']} ({s['domain']}/{s['category']}, priority={s['priority']}): "
             f"{s['description']}"
             f" | required slots: {', '.join(s.get('slots', {}).get('required', [])) or 'none'}"
             f" | optional slots: {', '.join(s.get('slots', {}).get('optional', [])) or 'none'}"
+            f" | examples: {example_ru}; {example_kk}"
             + (f" | not this if: {not_this_if}" if not_this_if else "")
         )
     return "\n".join(lines)
@@ -52,6 +56,14 @@ The "scenarios" list must NEVER be empty. Include each distinct request once:
 If the client's turn contains more than one distinct request (multi-intent), list ALL of them in "scenarios",
 in the order the client said them, but with any priority="urgent" scenario moved first.
 Urgent scenarios (priority=urgent) must be prioritized when present.
+Do not put alternative interpretations or SYS_UNCLEAR alongside a concrete scenario in "scenarios";
+put plausible but unrequested alternatives in "alternatives" only.
+Distinguish an intention to buy OGPO now (SC02) from asking only for a quote (SC01).
+Booking a doctor under an employer's existing DMS is SC21, not corporate sales SC10.
+Asking whether DMS covers tests is SC22; a missing DMS card inside the app is SC24.
+Questions about documents for a claim are SC18, even when the damage is to property.
+A suspicious caller, payment demand, or SMS link claiming to represent Saqta is SC38.
+A certificate for a visa or embassy is SC39, even if travel is the reason for the certificate.
 Extract only slot names from the chosen scenario catalog entries. Preserve the slot types
 (for example drivers_iin is a list), normalize dates as YYYY-MM-DD relative to 2026-10-01,
 and do not guess missing values. For a short answer supplying a requested slot, keep the

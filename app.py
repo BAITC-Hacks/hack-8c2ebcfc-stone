@@ -4,12 +4,13 @@ import time
 import streamlit as st
 
 from backend.actions_mock import ActionError, call_action
+from backend.confirmation import classify_confirmation
 from backend.data_loader import scenario_by_id
 from backend.decision_policy import decide
 from backend.executor import run_scenario
 from backend.router import route
 from backend.state import DialogState
-from backend.triage import detect_language, normalize_phone
+from backend.triage import detect_language, detect_urgency, normalize_phone
 
 st.set_page_config(page_title="Saqta Voice Router", layout="wide")
 
@@ -31,8 +32,21 @@ if "queued_scenarios" not in st.session_state:
 st.title("Saqta Insurance — Voice Router")
 
 IIN_RE = re.compile(r"\b\d{12}\b")
-YES_WORDS = {"да", "ага", "угу", "подтверждаю", "ок", "окей", "конечно", "хорошо", "yes", "ok", "иә"}
-NO_WORDS = {"нет", "отмена", "отменить", "no", "cancel", "жоқ"}
+CLAIM_RE = re.compile(r"\bCL-\d{6}\b", re.IGNORECASE)
+POLICY_RE = re.compile(r"\bSQ-(?:OGPO|CASCO|TRVL|PROP|NS|DMS)-\d{6}\b", re.IGNORECASE)
+
+
+def _interruption(text: str) -> str | None:
+    words = set(re.findall(r"\w+", text.lower()))
+    if words & {"оператор", "оператором", "человеком", "человека", "адаммен", "операторға"}:
+        return "operator"
+    if detect_urgency(text) and any(w in words for w in ("сейчас", "только", "қазір", "шетелде", "мошенник", "алаяқ")):
+        return "urgent"
+    if "давайте потом" in text.lower() or "сначала" in words:
+        return "urgent"
+    if words & {"отмена", "отменить", "отменяю", "жоқ"}:
+        return "cancel"
+    return None
 
 
 def _extract_identity(text: str) -> dict:
@@ -43,7 +57,22 @@ def _extract_identity(text: str) -> dict:
     iin_match = IIN_RE.search(text)
     if iin_match:
         ident["iin"] = iin_match.group()
+    claim_match = CLAIM_RE.search(text)
+    if claim_match:
+        ident["claim_number"] = claim_match.group().upper()
+    policy_match = POLICY_RE.search(text)
+    if policy_match:
+        ident["policy_number"] = policy_match.group().upper()
     return ident
+
+
+def _sms_retry_requested(text: str, state: DialogState) -> bool:
+    if not state.pending_sms:
+        return False
+    lower = text.lower()
+    if any(word in lower for word in ("sms", "смс", "хабарлама")):
+        return True
+    return bool(state.pending_sms.get("awaiting_phone") and normalize_phone(text))
 
 
 def _closing_message(scenario: dict, state: DialogState, executed_actions: list[dict]) -> str:
@@ -55,10 +84,29 @@ def _closing_message(scenario: dict, state: DialogState, executed_actions: list[
     template = scenario.get("responses", {}).get(lang, {}).get("closing")
     if not template:
         return f"Готово: {merged}" if merged else "Готово."
+    scenario_id = scenario.get("scenario_id")
+    if scenario_id == "SC06" and merged.get("policy_number"):
+        if lang == "kk":
+            return f"{merged['policy_number']} полисі рәсімделді. Бағасы {merged.get('price', 'нақтыланады')} теңге."
+        return f"Полис {merged['policy_number']} оформлен. Стоимость {merged.get('price', 'уточняется')} тенге."
+    sms_sent = any(a.get("action") == "send_sms" and a.get("mode") == "execute" for a in executed_actions)
+    if "send_sms" in scenario.get("actions", []) and not sms_sent:
+        if scenario_id == "SC02":
+            return f"Полис {merged.get('policy_number', '')} оформлен. SMS не отправлена; при необходимости уточните номер."
+        if scenario_id == "SC27":
+            return f"Полис {merged.get('policy_number', '')} продлён. Стоимость {merged.get('price', 'уточняется')} тенге. SMS не отправлена."
+        if scenario_id in ("SC12", "SC14", "SC16"):
+            return f"Заявление {merged.get('claim_number', '')} зарегистрировано. SMS не отправлена."
+        if scenario_id == "SC23":
+            return f"Партнёрские клиники: {merged.get('clinics', [])}."
+        if scenario_id == "SC18":
+            return f"Документы для обращения: {merged.get('answer', [])}."
+        if scenario_id == "SC11":
+            return "Сфотографируйте место происшествия и автомобили. SMS с инструкцией не отправлена."
     try:
         return template.format(**merged)
     except (KeyError, IndexError):
-        return template
+        return "Операция завершена. Подробности доступны у оператора."
 
 
 def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
@@ -78,13 +126,11 @@ def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
     if status == "need_confirmation":
         st.session_state.awaiting_slots = None
         st.session_state.awaiting_confirmation = scenario_id
-        previews = [
-            f"{a['action']}: {a['result']}"
-            for a in result.get("actions", [])
-            if a.get("mode") == "preview" and "result" in a
-        ]
-        preview_text = "; ".join(previews) if previews else "детали уточняются"
-        return f"Проверьте, пожалуйста: {preview_text}. Подтверждаете? (да/нет)"
+        return f"Проверьте, пожалуйста: {result.get('confirmation', 'детали операции')}. Подтверждаете? (да/нет)"
+
+    if status == "confirmation_expired":
+        st.session_state.awaiting_confirmation = None
+        return "Данные операции изменились. Уточним их и запросим подтверждение заново."
 
     if status == "action_error":
         return (
@@ -127,13 +173,70 @@ with chat_col:
         router_output = None
         decision_action = None
         result = None
+        waiting = bool(
+            st.session_state.awaiting_identification
+            or st.session_state.awaiting_confirmation
+            or st.session_state.awaiting_slots
+        )
+        interruption = _interruption(user_input) if waiting else None
 
-        if st.session_state.awaiting_identification:
+        if interruption in ("operator", "cancel", "urgent"):
+            previous = (
+                st.session_state.awaiting_identification
+                or st.session_state.awaiting_confirmation
+                or st.session_state.awaiting_slots
+            )
+            st.session_state.awaiting_identification = None
+            st.session_state.awaiting_confirmation = None
+            st.session_state.awaiting_slots = None
+            st.session_state.queued_scenarios = []
+            state.pending_confirmation = None
+            if previous:
+                state.active_scenario = previous
+
+        if interruption == "operator":
+            transfer = call_action("transfer_to_operator", _store=state.mock_data, queue="operator_general")
+            st.session_state.turn_actions.append({"action": "transfer_to_operator", "mode": "execute", "result": transfer})
+            decision_action = "handoff"
+            reply = "Соединяю с оператором и передаю контекст вашего обращения."
+
+        elif interruption == "cancel":
+            reply = "Хорошо, отменяю текущую операцию."
+
+        elif _sms_retry_requested(user_input, state):
+            phone = normalize_phone(user_input) or state.pending_sms.get("phone")
+            if not phone:
+                state.pending_sms["awaiting_phone"] = True
+                reply = "Назовите номер телефона для повторной отправки SMS."
+            else:
+                try:
+                    sent = call_action("send_sms", _store=state.mock_data, phone=phone)
+                    st.session_state.turn_actions.append({"action": "send_sms", "mode": "execute", "result": sent})
+                    state.pending_sms = None
+                    reply = "SMS отправлена повторно."
+                except ActionError as error:
+                    state.pending_sms["phone"] = phone
+                    reply = f"Не удалось отправить SMS ({error.code}). Основная операция уже выполнена."
+
+        elif st.session_state.awaiting_identification:
             scenario_id = st.session_state.awaiting_identification
             ident = _extract_identity(user_input)
             try:
-                found = call_action("find_client", **ident)
-                state.client_id = found["client_id"]
+                if ident.get("phone") or ident.get("iin"):
+                    found = call_action("find_client", _store=state.mock_data, **ident)
+                    state.client_id = found["client_id"]
+                elif ident.get("claim_number"):
+                    claim = next((c for c in state.mock_data["claims"] if c["claim_number"] == ident["claim_number"]), None)
+                    if not claim or not claim.get("client_id"):
+                        raise ActionError("not_found", "claim not found")
+                    state.client_id = claim["client_id"]
+                elif ident.get("policy_number"):
+                    policy = next((p for p in state.mock_data["policies"] if p["policy_number"] == ident["policy_number"]), None)
+                    if not policy or not policy.get("client_id"):
+                        raise ActionError("not_found", "policy not found")
+                    state.client_id = policy["client_id"]
+                else:
+                    raise ActionError("not_found", "identity not supplied")
                 for slot_name, slot_value in ident.items():
                     state.set_slot(slot_name, slot_value)
                 st.session_state.awaiting_identification = None
@@ -144,12 +247,12 @@ with chat_col:
 
         elif st.session_state.awaiting_confirmation:
             scenario_id = st.session_state.awaiting_confirmation
-            answer_words = set(re.findall(r"[\w]+", user_input.lower()))
-            if answer_words & YES_WORDS and not answer_words & NO_WORDS:
+            answer = classify_confirmation(user_input)
+            if answer == "yes":
                 st.session_state.awaiting_confirmation = None
                 result = run_scenario(scenario_id, state, confirmed=True)
                 reply = handle_result(scenario_id, result, state)
-            elif answer_words & NO_WORDS and not answer_words & YES_WORDS:
+            elif answer == "no":
                 st.session_state.awaiting_confirmation = None
                 state.pending_confirmation = None
                 reply = "Хорошо, отменяю операцию."

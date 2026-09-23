@@ -1,4 +1,7 @@
 from dataclasses import dataclass, field
+from copy import deepcopy
+
+from backend.data_loader import mock_backend
 
 
 @dataclass
@@ -11,6 +14,8 @@ class DialogState:
     turn: int = 0
     history: list[dict] = field(default_factory=list)
     pending_confirmation: dict | None = None
+    pending_sms: dict | None = None
+    mock_data: dict = field(default_factory=lambda: deepcopy(mock_backend()))
 
     def push_scenario(self, scenario_id: str) -> None:
         if self.active_scenario:
