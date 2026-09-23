@@ -1,9 +1,9 @@
 """Conversation language selection, independent of scenario routing.
 
-The router decides the language of complete utterances, with a local correction
-when clear words from both languages establish code-switching. The same small
-fallback serves confirmation/identification turns that do not call the router
-and keeps language stable for language-neutral values.
+Strong language evidence takes precedence over the router's language hints.
+The router resolves utterances with sparse local evidence. The same small fallback
+serves confirmation/identification turns that do not call the router and keeps
+language stable for language-neutral values.
 """
 
 import re
@@ -24,6 +24,7 @@ _KAZAKH_WORDS = {
 }
 _RUSSIAN_WORDS = {
     "здравствуйте", "здравствуй", "привет", "спасибо", "пожалуйста",
+    "добрый", "день", "будет", "стоить",
     "хочу", "хотим", "нужен", "нужна", "нужно", "нужны", "можно",
     "можете", "можно", "как", "какой", "какая", "какие", "что", "где",
     "когда", "сколько", "почему", "мне", "меня", "мой", "моя", "мои",
@@ -74,8 +75,7 @@ def detect_language(text: str, previous: str = "ru") -> str:
         return "mixed"
     if kazakh:
         return "kk"
-    # This fallback is intentionally conservative: the LLM can override it for
-    # full requests, while ordinary Russian continuations still switch to RU.
+    # Without positive evidence, RU is only a fallback that the LLM can override.
     return "ru"
 
 
@@ -97,19 +97,27 @@ def update_language(
         state.response_language = previous_response
         return
     local_language = detect_language(text, previous)
+    words = _words(text)
+    russian, kazakh = _language_counts(words)
     detected = (
         router_language if router_language in _LANGUAGES
         else local_language
     )
-    if local_language == "mixed":
-        detected = "mixed"
+    # A mistaken router label must not change a clearly Russian/Kazakh turn
+    # into the other reply language (including after a previous language switch).
+    # Only positive evidence is authoritative: no Kazakh-specific letters does
+    # not prove Russian, e.g. "Полис жасату" still needs the router's decision.
+    # A small lexicon can miss part of mixed speech. One known word, or half
+    # the words, is insufficient to overrule a mixed label from the model.
+    strong_single_language = max(russian, kazakh) >= 2 and max(russian, kazakh) * 2 > len(words)
+    if local_language == "mixed" or strong_single_language:
+        detected = local_language
     state.language = detected
     if detected != "mixed":
         state.response_language = detected
     elif response_language in {"ru", "kk"}:
         state.response_language = response_language
     else:
-        russian, kazakh = _language_counts(_words(text))
         state.response_language = (
             "kk" if kazakh > russian else "ru" if russian > kazakh
             else previous_response

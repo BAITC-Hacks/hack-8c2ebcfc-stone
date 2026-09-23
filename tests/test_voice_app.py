@@ -73,6 +73,32 @@ class VoiceAppTests(unittest.TestCase):
         self.assertNotIn("city", reply)
         self.speak.assert_called_with(reply, "kk")
 
+    def test_russian_question_after_kazakh_gets_russian_reply_despite_router_error(self):
+        text = "Добрый день! Сколько будет стоить обязательная страховка на машину?"
+        expected = next(s["prompt"]["ru"] for s in slots_catalog()["slots"] if s["name"] == "region")
+        for model_language in ("kk", "mixed"):
+            for microphone in (False, True):
+                with self.subTest(model_language=model_language, microphone=microphone):
+                    self.audio_input.return_value = None
+                    self.route.return_value = routed("kk")
+                    app = self._app()
+                    self._type(app, "Мен несие алғым келеді")
+                    self.assertEqual(app.session_state.state.response_language, "kk")
+                    self.route.return_value = {**routed(model_language, "SC01"), "response_language": "kk"}
+                    if microphone:
+                        self.audio_input.return_value = io.BytesIO(b"russian-question")
+                        self.transcribe.return_value = (text, 8.0)
+                        app.run(timeout=20)
+                        self.assertFalse(app.exception)
+                        reply = app.session_state.messages[-1]["text"]
+                    else:
+                        reply = self._type(app, text)
+                    self.assertIn(expected, reply)
+                    self.assertNotIn("Көлік қай қалада тіркелген?", reply)
+                    self.assertEqual(app.session_state.last_trace["language"], "ru")
+                    self.assertEqual(app.session_state.state.response_language, "ru")
+                    self.speak.assert_called_with(reply, "ru")
+
     def test_numeric_identity_preserves_kazakh_response_language(self):
         self.route.return_value = routed("kk", "SC17")
         app = self._app()
