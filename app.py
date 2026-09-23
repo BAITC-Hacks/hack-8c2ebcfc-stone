@@ -135,8 +135,6 @@ st.markdown(
     'русский / қазақша / смешанная речь</div>',
     unsafe_allow_html=True,
 )
-st.caption("AI дауысы / Ответы озвучены искусственным голосом")
-
 _DEMO_LANG_OPTIONS = {"Русский": "ru", "Қазақша": "kk"}
 demo_lang_label = st.radio(
     "Язык по умолчанию для демо",
@@ -149,6 +147,11 @@ if st.session_state.get("_applied_demo_lang") != demo_lang and st.session_state.
     st.session_state.state.language = demo_lang
     st.session_state.state.response_language = demo_lang
     st.session_state["_applied_demo_lang"] = demo_lang
+
+st.caption(
+    "AI дауысы / Дауыс арқылы жауап береді" if demo_lang == "kk"
+    else "AI-голос / Ответы озвучены искусственным голосом"
+)
 
 IIN_RE = re.compile(r"\b\d{12}\b")
 CLAIM_RE = re.compile(r"\bCL-\d{6}\b", re.IGNORECASE)
@@ -356,8 +359,8 @@ with chat_col:
             except Exception as error:
                 st.caption(type(error).__name__)
 
-    audio_value = st.audio_input("Сөйлеңіз / Говорите в микрофон")
-    typed_input = st.chat_input("...немесе мәтін жазыңыз / ...или напишите текстом")
+    audio_value = st.audio_input("Сөйлеңіз" if demo_lang == "kk" else "Говорите в микрофон")
+    typed_input = st.chat_input("...немесе мәтін жазыңыз" if demo_lang == "kk" else "...или напишите текстом")
     retry_stt = False
     if st.session_state.stt_error:
         st.warning(st.session_state.stt_error)
@@ -619,7 +622,10 @@ with chat_col:
 
 with trace_col:
     st.subheader("Trace panel")
-    st.caption("Что решил роутер и почему — видно супервизору после каждой реплики")
+    st.caption(
+        "Роутер не шешкенін супервизор осы жерден көреді" if demo_lang == "kk"
+        else "Что решил роутер и почему — видно супервизору после каждой реплики"
+    )
 
     trace = st.session_state.get("last_trace", {})
 
