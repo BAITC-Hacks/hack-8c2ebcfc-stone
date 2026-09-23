@@ -16,7 +16,10 @@ def missing_slots(scenario_id: str, state: DialogState) -> list[str]:
     if scenario is None:
         return []
     required = scenario.get("slots", {}).get("required", [])
-    return [s for s in required if s not in state.slots]
+    return [
+        s for s in required
+        if s not in state.slots or state.slots[s] is None or state.slots[s] == "" or state.slots[s] == []
+    ]
 
 
 def _infer_product_type(scenario: dict) -> str | None:
