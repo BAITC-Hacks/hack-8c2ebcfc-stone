@@ -16,7 +16,7 @@ def detect_language(text: str) -> str:
     return "ru" if cyrillic > 0 else "ru"
 
 
-PHONE_RE = re.compile(r"(?:\+?7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}")
+PHONE_RE = re.compile(r"(?<!\d)(?:\+?7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}(?!\d)")
 
 _UNITS = {
     "ноль": 0, "нуль": 0, "нөл": 0, "один": 1, "одна": 1, "бір": 1,
