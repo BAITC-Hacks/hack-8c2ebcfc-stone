@@ -145,7 +145,8 @@ def run_scenario(scenario_id: str, state: DialogState, confirmed: bool = False) 
         preview_actions = []
         for action_name in action_names:
             spec = action_spec(action_name)
-            if spec and spec.get("irreversible"):
+            if action_name == "send_sms" or (spec and spec.get("irreversible")):
+                # Notifications belong to the confirmed pass as well.
                 preview_actions.append({"action": action_name, "mode": "pending"})
                 continue
             if spec and not _inputs_ready(spec, kwargs):
