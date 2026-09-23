@@ -12,6 +12,17 @@ APP = str(Path(__file__).resolve().parents[1] / "app.py")
 
 
 class AppReview(unittest.TestCase):
+    def test_urgent_slot_questions_use_catalog_prompts(self):
+        router.route = lambda *_: self._route(["SC11"])
+        app = AppTest.from_file(APP).run(timeout=20)
+        app.chat_input[0].set_value("Действия при ДТП.").run(timeout=20)
+        self.assertFalse(app.exception)
+        reply = app.session_state.messages[-1]["text"]
+        self.assertIn("112", reply)
+        self.assertIn("Есть пострадавшие?", reply)
+        self.assertIn("Где вы сейчас находитесь?", reply)
+        self.assertNotIn("injured", reply)
+
     @staticmethod
     def _route(ids, slots=None, continuation=False):
         return {

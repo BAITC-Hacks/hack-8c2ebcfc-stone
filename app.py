@@ -5,7 +5,7 @@ import streamlit as st
 
 from backend.actions_mock import ActionError, call_action
 from backend.confirmation import classify_confirmation
-from backend.data_loader import scenario_by_id
+from backend.data_loader import scenario_by_id, slots_catalog
 from backend.decision_policy import decide
 from backend.executor import run_scenario
 from backend.router import route
@@ -161,7 +161,11 @@ def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
     if status == "need_slots":
         st.session_state.awaiting_slots = scenario_id
         missing = result.get("slots", [])
-        return ("Нақтылаңызшы: " if kk else "Уточните, пожалуйста: ") + ", ".join(missing)
+        prompts = {slot["name"]: slot.get("prompt", {}) for slot in slots_catalog()["slots"]}
+        language = "kk" if kk else "ru"
+        questions = [prompts.get(name, {}).get(language, name) for name in missing]
+        opening = scenario.get("responses", {}).get(language, {}).get("opening", "") if scenario_id == "SC11" else ""
+        return " ".join(part for part in (opening, *questions) if part)
 
     if status == "need_confirmation":
         st.session_state.awaiting_slots = None
