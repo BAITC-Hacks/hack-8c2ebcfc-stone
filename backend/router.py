@@ -28,14 +28,15 @@ def _scenario_catalog_prompt() -> str:
             for r in s.get("not_this_if", [])
         )
         examples = s.get("examples", {})
-        example_ru = next(iter(examples.get("ru", [])), "")
-        example_kk = next(iter(examples.get("kk", [])), "")
+        example_ru = examples.get("ru", [])[:2]
+        example_kk = examples.get("kk", [])[:2]
         lines.append(
             f"{s['scenario_id']} ({s['domain']}/{s['category']}, priority={s['priority']}): "
             f"{s['description']}"
             f" | required slots: {', '.join(s.get('slots', {}).get('required', [])) or 'none'}"
             f" | optional slots: {', '.join(s.get('slots', {}).get('optional', [])) or 'none'}"
-            f" | examples: {example_ru}; {example_kk}"
+            f" | examples_ru: {json.dumps(example_ru, ensure_ascii=False)}"
+            f" | examples_kk: {json.dumps(example_kk, ensure_ascii=False)}"
             + (f" | not this if: {not_this_if}" if not_this_if else "")
         )
     return "\n".join(lines)
@@ -91,6 +92,8 @@ not additional requests. Preserve all actual requests even when they share a pro
 Disambiguate by the requested service, not isolated insurance or company keywords:
 - SC01: only asking for a price/quote. SC02: a clear intention to buy OGPO now.
 - SC22: coverage of a specific medical service, test or medicine under DMS.
+  Lab tests ("талдаулар", "анализы") are a specific service, even if the client
+  only says "my insurance" rather than the letters DMS.
   SC40: explanation of general terms, exclusions, deductibles or limits.
   SC24: the DMS e-card itself is missing or not showing in the app — not a coverage question.
 - SC21: an individual wants a doctor appointment, including with employer-provided DMS.
@@ -107,6 +110,11 @@ Disambiguate by the requested service, not isolated insurance or company keyword
   needs resending. Explicitly saying it is issued takes precedence over mentioning payment.
   SC30: money was debited but issuance failed, the policy is absent from the account,
   or payment/issuance status is uncertain. Payment alone does not prove issuance.
+  A question about when a claim payout will arrive is SC17, not SC30;
+  SC30 concerns payment by the client for buying a policy.
+- SC31: a question about available payment methods for an insurance policy.
+  If the client also asks to buy a policy, include both the purchase scenario
+  and SC31. "Қалай төлеуге болады?" asks how to pay and is a separate intent.
 - SC38: a suspicious caller, agent or message claims to represent us and asks for
   a transfer, a code or following a link. Treat "your agent" / "from you" as referring
   to Saqta even without its name. An unrelated scam with no insurance/company connection
@@ -117,6 +125,8 @@ Disambiguate by the requested service, not isolated insurance or company keyword
   A visa certificate request in Kazakh is SC39 without needing a policy reference.
   Actually obtaining a visa, a medical certificate or translating unrelated
   documents is outside our services. Buying travel insurance belongs to SC06.
+  A request for insurance needed to obtain a visa is SC06, not SC39; SC39
+  requires a request for a certificate or copy about an existing policy.
 
 Contrastive examples of the requested service (not additional client requests):
 - "Какие бумаги подать после кражи из дома?" -> [SC18].
@@ -124,6 +134,9 @@ Contrastive examples of the requested service (not additional client requests):
 - "Зарегистрируйте кражу из дома и назовите нужные документы" -> [SC14, SC18].
 - "Виза үшін саяхат сақтандыруын алғым келеді" -> [SC06].
 - "Елшілікке полисім туралы ағылшынша анықтама қажет" -> [SC39].
+- "Пришлите справку для посольства на английском" -> [SC39].
+- "Оформите полис для поездки. Какими способами его можно оплатить?" -> [SC06, SC31].
+- "Нужна страховка для отпуска и адрес вашего офиса в Алматы" -> [SC06, SC33].
 - "Сделайте справку, что я здоров, для консульства" -> [SYS_OUT_OF_SCOPE].
 - "Денсаулығым туралы анықтама керек, елшілікке апарамын" -> [SYS_OUT_OF_SCOPE].
 - "Меня обманули мошенники от имени банка, украли банковский код" -> [SYS_OUT_OF_SCOPE].
