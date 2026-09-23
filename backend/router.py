@@ -31,10 +31,6 @@ def _scenario_catalog_prompt() -> str:
             f"{s['scenario_id']} ({s['domain']}/{s['category']}, priority={s['priority']}): "
             f"{s['description']}"
             + (f" | not this if: {not_this_if}" if not_this_if else "")
-            + " | examples: " + json.dumps(
-                {lang: examples[:2] for lang, examples in s.get("examples", {}).items()},
-                ensure_ascii=False,
-            )
         )
     return "\n".join(lines)
 
@@ -46,6 +42,13 @@ def _slot_catalog_prompt() -> list[dict]:
          {"name", "type", "description", "pattern", "values"}}
         for slot in slots_catalog()["slots"]
     ]
+
+
+def _enum_slot_hints() -> str:
+    return "; ".join(
+        f"{slot['name']}: {', '.join(map(str, slot['values']))}"
+        for slot in slots_catalog()["slots"] if slot.get("values")
+    )
 
 
 SYSTEM_PROMPT = """You are the scenario router for Saqta Insurance's voice agent.
@@ -69,6 +72,8 @@ The "scenarios" list must NEVER be empty. Return one entry per distinct requeste
 - "SYS_OUT_OF_SCOPE" if the request has nothing to do with Saqta's insurance products or services.
 - "SYS_UNCLEAR" only if the request IS about Saqta but you truly cannot tell which scenario — never for off-topic requests.
 - "SYS_GOODBYE" if the client is ending the conversation.
+Do not put alternative interpretations or SYS_UNCLEAR alongside a concrete scenario in "scenarios";
+put plausible but unrequested alternatives in "alternatives" only.
 
 If the client's turn contains more than one distinct request (multi-intent), list ALL of them in "scenarios",
 in the order the client said them, but with any priority="urgent" scenario moved first.
@@ -78,8 +83,10 @@ Do not turn background facts into extra requests. Alternatives are competing int
 not additional requests. Preserve all actual requests even when they share a product.
 
 Disambiguate by the requested service, not isolated insurance or company keywords:
+- SC01: only asking for a price/quote. SC02: a clear intention to buy OGPO now.
 - SC22: coverage of a specific medical service, test or medicine under DMS.
   SC40: explanation of general terms, exclusions, deductibles or limits.
+  SC24: the DMS e-card itself is missing or not showing in the app — not a coverage question.
 - SC21: an individual wants a doctor appointment, including with employer-provided DMS.
   SC10: a company representative wants to PURCHASE insurance for employees or assets.
   An employer-provided policy alone does not imply corporate sales.
@@ -130,6 +137,8 @@ Extract slots using the provided slot catalog; never invent missing values.
 All scalar slots (including phone, vehicle plate and IIN) must be strings, never arrays;
 omit missing slots instead of returning empty arrays. Normalize phone numbers to +7
 followed by 10 digits, with no spaces.
+Preserve slot types as given (for example drivers_iin is a list, not a string).
+For enum-type slots, map the client's words to the exact catalog code, not the spoken phrase.
 Resolve relative dates against the dataset date 2026-10-01.
 For an answer supplying requested slots or a confirmation in an active scenario,
 keep that scenario and set is_continuation=true. A new request is not a continuation.
@@ -142,6 +151,8 @@ def route(utterance: str, state: DialogState) -> dict:
     system_prompt = (
         f"Scenario catalog:\n{_scenario_catalog_prompt()}\n\n"
         f"Slot catalog:\n{json.dumps(_slot_catalog_prompt(), ensure_ascii=False)}\n\n"
+        f"Allowed enum slot values (map Russian/Kazakh names to these codes):\n"
+        f"{_enum_slot_hints()}\n\n"
         f"{SYSTEM_PROMPT}"
     )
     user_prompt = (
