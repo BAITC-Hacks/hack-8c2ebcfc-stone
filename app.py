@@ -1,5 +1,4 @@
 import hashlib
-import io
 import re
 import time
 
@@ -7,13 +6,16 @@ import streamlit as st
 
 from backend.actions_mock import ActionError, call_action
 from backend.confirmation import classify_confirmation
-from backend.data_loader import scenario_by_id
+from backend.data_loader import scenario_by_id, slots_catalog
 from backend.decision_policy import decide
 from backend.executor import run_scenario
-from backend.router import _get_client, route
+from backend.router import route
+from backend.language import update_language
+from backend.reply_language import localize_details
+from backend.speech import speak, transcribe
 from backend.slot_normalization import normalize_slot
 from backend.state import DialogState
-from backend.triage import detect_language, detect_urgency, normalize_phone
+from backend.triage import detect_urgency, normalize_phone
 
 st.set_page_config(page_title="Saqta Voice Router", layout="wide", page_icon="🎙️")
 
@@ -62,27 +64,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-_KK_PROMPT_BIAS = (
-    "Сақтандыру компаниясының байланыс орталығы. Сөйлеу қазақша, орысша немесе "
-    "аралас болуы мүмкін. ОГПО, КАСКО, ДМС, полис, өтініш, сақтандыру."
-)
-
-
-def transcribe(audio_file) -> tuple[str, float]:
-    t0 = time.perf_counter()
-    resp = _get_client().audio.transcriptions.create(
-        model="gpt-4o-transcribe",
-        file=("speech.wav", audio_file.getvalue(), "audio/wav"),
-        prompt=_KK_PROMPT_BIAS,
-    )
-    return resp.text, (time.perf_counter() - t0) * 1000
-
-
-def speak(text: str) -> tuple[bytes, float]:
-    t0 = time.perf_counter()
-    resp = _get_client().audio.speech.create(model="tts-1", voice="alloy", input=text)
-    return resp.content, (time.perf_counter() - t0) * 1000
-
 if "state" not in st.session_state:
     st.session_state.state = DialogState()
 if "messages" not in st.session_state:
@@ -104,6 +85,7 @@ st.markdown(
     'RU / KK / смешанная речь</div>',
     unsafe_allow_html=True,
 )
+st.caption("AI дауысы / Ответы озвучены искусственным голосом")
 
 IIN_RE = re.compile(r"\b\d{12}\b")
 CLAIM_RE = re.compile(r"\bCL-\d{6}\b", re.IGNORECASE)
@@ -178,7 +160,7 @@ def _run_queued(state: DialogState) -> str:
         return ""
     next_id = st.session_state.queued_scenarios.pop(0)
     if next_id.startswith("SYS_"):
-        return _system_reply(next_id, state.language) + (" " + rest if (rest := _run_queued(state)) else "")
+        return _system_reply(next_id, state.response_language) + (" " + rest if (rest := _run_queued(state)) else "")
     return handle_result(next_id, run_scenario(next_id, state), state)
 
 
@@ -188,10 +170,10 @@ def _closing_message(scenario: dict, state: DialogState, executed_actions: list[
         if isinstance(a.get("result"), dict):
             merged.update(a["result"])
     merged = {key: _friendly_value(value) if isinstance(value, (dict, list)) else value for key, value in merged.items()}
-    lang = state.language if state.language in ("ru", "kk") else "ru"
+    lang = state.response_language
     template = scenario.get("responses", {}).get(lang, {}).get("closing")
     if not template:
-        return f"Готово: {merged}" if merged else "Готово."
+        return ("Дайын." if lang == "kk" else "Готово.")
     scenario_id = scenario.get("scenario_id")
     if scenario_id == "SC06" and merged.get("policy_number"):
         if lang == "kk":
@@ -214,13 +196,13 @@ def _closing_message(scenario: dict, state: DialogState, executed_actions: list[
     try:
         return template.format(**merged)
     except (KeyError, IndexError):
-        return "Операция завершена. Подробности доступны у оператора."
+        return "Операция аяқталды. Толық ақпаратты оператордан біле аласыз." if lang == "kk" else "Операция завершена. Подробности доступны у оператора."
 
 
 def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
     status = result.get("status")
     scenario = scenario_by_id(scenario_id) or {}
-    kk = state.language == "kk"
+    kk = state.response_language == "kk"
     st.session_state.turn_actions.extend(result.get("actions", []))
 
     if status == "need_identification":
@@ -234,9 +216,12 @@ def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
     if status == "need_slots":
         st.session_state.awaiting_slots = scenario_id
         missing = result.get("slots", [])
-        return ("Нақтылаңызшы: " if kk else "Уточните, пожалуйста: ") + ", ".join(missing)
+        prompts = {slot["name"]: slot.get("prompt", {}) for slot in slots_catalog()["slots"]}
+        fallback = "Сұрау деректерін нақтылаңызшы." if kk else "Уточните, пожалуйста, данные запроса."
+        return " ".join(prompts.get(name, {}).get(state.response_language, fallback) for name in missing[:1])
 
     if status == "need_confirmation":
+        st.session_state.needs_localization = True
         st.session_state.awaiting_slots = None
         st.session_state.awaiting_confirmation = scenario_id
         if kk:
@@ -248,12 +233,15 @@ def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
         return "Операция деректері өзгерді. Оларды нақтылап, қайта растауды сұраймын." if kk else "Данные операции изменились. Уточним их и запросим подтверждение заново."
 
     if status == "action_error":
+        if kk:
+            return "Әрекетті орындау мүмкін болмады. Операторға қосамын."
         return (
             f"Не получилось выполнить действие «{result.get('action')}» "
             f"({result.get('code')}). Соединяю с оператором."
         )
 
     if status == "done":
+        st.session_state.needs_localization = bool(result.get("actions")) or st.session_state.needs_localization
         st.session_state.awaiting_slots = None
         st.session_state.awaiting_confirmation = None
         reply = _closing_message(scenario, state, result.get("actions", []))
@@ -262,19 +250,20 @@ def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
         return reply
 
     if status == "error":
+        if kk:
+            return "Сұрауды анықтау мүмкін болмады. Қайта айтып жіберіңізші."
         return f"Не удалось определить сценарий: {result.get('reason')}"
 
-    return str(result)
+    return "Сұрауды қайта айтып жіберіңізші." if kk else "Повторите, пожалуйста, запрос."
 
 
-if "last_audio_hash" not in st.session_state:
-    st.session_state.last_audio_hash = None
-if "stt_ms" not in st.session_state:
-    st.session_state.stt_ms = 0.0
-if "tts_ms" not in st.session_state:
-    st.session_state.tts_ms = 0.0
-if "last_reply_audio" not in st.session_state:
-    st.session_state.last_reply_audio = None
+for key, default in {
+    "last_audio_hash": None, "last_reply_audio": None, "autoplay_reply": False,
+    "stt_error": None, "tts_error": None, "reply_error": None, "failed_audio_hash": None,
+    "stt_ms": 0.0, "needs_localization": False,
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
 chat_col, trace_col = st.columns([2, 1])
 
@@ -284,29 +273,72 @@ with chat_col:
             st.write(m["text"])
 
     if st.session_state.last_reply_audio:
-        st.audio(st.session_state.last_reply_audio, format="audio/mp3", autoplay=True)
+        st.audio(st.session_state.last_reply_audio, format="audio/mp3", autoplay=st.session_state.autoplay_reply)
+        st.session_state.autoplay_reply = False
+    if st.session_state.reply_error:
+        st.warning(st.session_state.reply_error)
+    if st.session_state.tts_error:
+        st.warning(st.session_state.tts_error)
+        if st.button("Қайта тыңдау / Повторить озвучку"):
+            try:
+                # Retry only synthesis; never execute the scenario a second time.
+                reply = st.session_state.messages[-1]["text"]
+                audio_bytes, _ = speak(reply, st.session_state.state.response_language)
+                st.session_state.last_reply_audio = audio_bytes
+                st.session_state.autoplay_reply = True
+                st.session_state.tts_error = None
+                st.rerun()
+            except Exception as error:
+                st.caption(type(error).__name__)
 
-    audio_value = st.audio_input("Говорите с клиентом (микрофон)")
-    typed_input = st.chat_input("...или напишите текстом")
+    audio_value = st.audio_input("Сөйлеңіз / Говорите в микрофон")
+    typed_input = st.chat_input("...немесе мәтін жазыңыз / ...или напишите текстом")
+    retry_stt = False
+    if st.session_state.stt_error:
+        st.warning(st.session_state.stt_error)
+        retry_stt = st.button("Қайта тану / Повторить распознавание")
 
-    user_input = None
+    user_input = typed_input
+    if typed_input and audio_value is not None:
+        # Text wins when both inputs arrive; do not replay stale audio on rerun.
+        st.session_state.last_audio_hash = hashlib.sha256(audio_value.getvalue()).hexdigest()
+        st.session_state.failed_audio_hash = None
+        st.session_state.stt_error = None
     st.session_state.stt_ms = 0.0
-    if audio_value is not None:
+    if not typed_input and audio_value is not None:
         audio_hash = hashlib.sha256(audio_value.getvalue()).hexdigest()
-        if audio_hash != st.session_state.last_audio_hash:
-            st.session_state.last_audio_hash = audio_hash
-            with st.spinner("Распознаю речь..."):
-                user_input, stt_ms = transcribe(audio_value)
-            st.session_state.stt_ms = stt_ms
-    if typed_input:
-        user_input = typed_input
+        new_audio = audio_hash != st.session_state.last_audio_hash
+        retry_allowed = audio_hash != st.session_state.failed_audio_hash or retry_stt
+        if new_audio and retry_allowed:
+            try:
+                with st.spinner("Тыңдап жатырмын / Распознаю речь..."):
+                    user_input, stt_ms = transcribe(audio_value)
+                if not user_input.strip():
+                    raise ValueError("No speech recognized")
+                st.session_state.stt_ms = stt_ms
+                st.session_state.last_audio_hash = audio_hash
+                st.session_state.failed_audio_hash = None
+                st.session_state.stt_error = None
+            except Exception as error:
+                user_input = None
+                st.session_state.failed_audio_hash = audio_hash
+                st.session_state.stt_error = (
+                    "Сөйлеуді тану мүмкін болмады. Қайталап көріңіз. / "
+                    f"Не удалось распознать речь ({type(error).__name__}). Повторите попытку."
+                )
+                st.rerun()
 
     if user_input:
         state = st.session_state.state
         st.session_state.turn_actions = []
         st.session_state.last_reply_audio = None
         st.session_state.messages.append({"role": "user", "text": user_input})
-        state.language = detect_language(user_input)
+        update_language(state, user_input)
+        st.session_state.needs_localization = False
+        st.session_state.reply_error = None
+        st.session_state.tts_error = None
+        router_ms = 0.0
+        reply_ms = 0.0
 
         t0 = time.perf_counter()
         router_output = None
@@ -346,10 +378,10 @@ with chat_col:
             transfer = call_action("transfer_to_operator", _store=state.mock_data, queue="operator_general")
             st.session_state.turn_actions.append({"action": "transfer_to_operator", "mode": "execute", "result": transfer})
             decision_action = "handoff"
-            reply = "Соединяю с оператором и передаю контекст вашего обращения."
+            reply = "Операторға қосып, сұрауыңыз туралы ақпаратты жіберемін." if state.response_language == "kk" else "Соединяю с оператором и передаю контекст вашего обращения."
 
         elif interruption == "cancel":
-            reply = "Хорошо, отменяю текущую операцию."
+            reply = "Жақсы, ағымдағы операцияны тоқтатамын." if state.response_language == "kk" else "Хорошо, отменяю текущую операцию."
             if declined_confirmation and st.session_state.queued_scenarios:
                 reply += " " + _run_queued(state)
 
@@ -357,16 +389,16 @@ with chat_col:
             phone = normalize_phone(user_input) or state.pending_sms.get("phone")
             if not phone:
                 state.pending_sms["awaiting_phone"] = True
-                reply = "Назовите номер телефона для повторной отправки SMS."
+                reply = "SMS-ті қайта жіберу үшін телефон нөміріңізді айтыңызшы." if state.response_language == "kk" else "Назовите номер телефона для повторной отправки SMS."
             else:
                 try:
                     sent = call_action("send_sms", _store=state.mock_data, phone=phone)
                     st.session_state.turn_actions.append({"action": "send_sms", "mode": "execute", "result": sent})
                     state.pending_sms = None
-                    reply = "SMS отправлена повторно."
+                    reply = "SMS қайта жіберілді." if state.response_language == "kk" else "SMS отправлена повторно."
                 except ActionError as error:
                     state.pending_sms["phone"] = phone
-                    reply = f"Не удалось отправить SMS ({error.code}). Основная операция уже выполнена."
+                    reply = "SMS жіберу мүмкін болмады. Негізгі операция орындалды." if state.response_language == "kk" else f"Не удалось отправить SMS ({error.code}). Основная операция уже выполнена."
 
         elif st.session_state.awaiting_identification:
             scenario_id = st.session_state.awaiting_identification
@@ -395,7 +427,7 @@ with chat_col:
             except ActionError:
                 reply = (
                     "Бұл деректер бойынша клиент табылмады. Телефон нөмірін немесе ЖСН-ді қайта айтыңызшы."
-                    if state.language == "kk" else
+                    if state.response_language == "kk" else
                     "Не нашла клиента с такими данными. Повторите телефон или ИИН, пожалуйста."
                 )
 
@@ -409,15 +441,16 @@ with chat_col:
             elif answer == "no":
                 st.session_state.awaiting_confirmation = None
                 state.pending_confirmation = None
-                reply = "Хорошо, отменяю операцию."
+                reply = "Жақсы, операцияны тоқтатамын." if state.response_language == "kk" else "Хорошо, отменяю операцию."
                 if st.session_state.queued_scenarios:
                     reply += " " + _run_queued(state)
             else:
-                reply = "Пожалуйста, подтвердите (да/нет)."
+                reply = "Растаңызшы (иә/жоқ)." if state.response_language == "kk" else "Пожалуйста, подтвердите (да/нет)."
 
         else:
             if st.session_state.awaiting_slots:
                 state.active_scenario = st.session_state.awaiting_slots
+            route_started = time.perf_counter()
             try:
                 router_output = route(user_input, state)
             except (ValueError, KeyError, TypeError):
@@ -425,6 +458,8 @@ with chat_col:
                     "scenarios": [{"scenario_id": "SYS_UNCLEAR", "confidence": 1.0, "reason": "router validation failed"}],
                     "alternatives": [], "slots": {}, "is_continuation": False,
                 }
+            router_ms = (time.perf_counter() - route_started) * 1000
+            update_language(state, user_input, router_output.get("language"), router_output.get("response_language"))
             for slot_name, slot_value in router_output.get("slots", {}).items():
                 normalized = normalize_slot(slot_name, slot_value)
                 if normalized is not None:
@@ -449,7 +484,7 @@ with chat_col:
                 else:
                     st.session_state.queued_scenarios = decision.scenario_ids[1:]
                 if scenario_id.startswith("SYS_"):
-                    reply = _system_reply(scenario_id, state.language)
+                    reply = _system_reply(scenario_id, state.response_language)
                     if st.session_state.queued_scenarios:
                         reply += " " + _run_queued(state)
                 else:
@@ -457,22 +492,38 @@ with chat_col:
                     reply = handle_result(scenario_id, result, state)
                 st.session_state.low_confidence_streak = 0
             elif decision.action == "clarify":
-                reply = "Уточните, пожалуйста, что именно вас интересует: " + ", ".join(decision.clarify_options)
+                prefix = "Нақты не қызықтыратынын айтыңызшы: " if state.response_language == "kk" else "Уточните, пожалуйста, что именно вас интересует: "
+                reply = prefix + ", ".join((scenario_by_id(sid) or {}).get("description", sid) for sid in decision.clarify_options)
+                st.session_state.needs_localization = True
                 st.session_state.low_confidence_streak += 1
             else:
-                reply = "Соединяю вас с оператором."
+                reply = "Сізді операторға қосамын." if state.response_language == "kk" else "Соединяю вас с оператором."
                 st.session_state.low_confidence_streak = 0
 
-        t_router = time.perf_counter() - t0
-
+        dialog_ms = (time.perf_counter() - t0) * 1000 - router_ms
+        if st.session_state.needs_localization:
+            reply_started = time.perf_counter()
+            try:
+                reply = localize_details(reply, state.response_language)
+            except Exception:
+                st.session_state.reply_error = (
+                    "Аударма уақытша қолжетімсіз. Бастапқы жауап көрсетілді. / "
+                    "Перевод временно недоступен; показан исходный ответ."
+                )
+            reply_ms = (time.perf_counter() - reply_started) * 1000
+        tts_started = time.perf_counter()
         try:
-            audio_bytes, tts_ms = speak(reply)
+            audio_bytes, tts_ms = speak(reply, state.response_language)
             st.session_state.last_reply_audio = audio_bytes
-        except Exception:
-            tts_ms = 0.0
+            st.session_state.autoplay_reply = True
+        except Exception as error:
+            tts_ms = (time.perf_counter() - tts_started) * 1000
             st.session_state.last_reply_audio = None
-
-        t_total = time.perf_counter() - t0
+            st.session_state.tts_error = (
+                "Дауыстық жауап қолжетімсіз. Қайта тыңдап көріңіз. / "
+                f"Озвучка не удалась ({type(error).__name__}); ответ сохранён."
+            )
+        t_total = (time.perf_counter() - t0) * 1000 + st.session_state.stt_ms
 
         state.record_turn("client", user_input)
         state.record_turn("bot", reply)
@@ -482,6 +533,8 @@ with chat_col:
             "turn": state.turn,
             "transcript": user_input,
             "language": state.language,
+            "response_language": state.response_language,
+            "audio_errors": {"tts": st.session_state.tts_error, "reply": st.session_state.reply_error},
             "scenarios": (router_output or {}).get("scenarios", []),
             "alternatives": (router_output or {}).get("alternatives", []),
             "reason": [s.get("reason") for s in (router_output or {}).get("scenarios", [])],
@@ -490,9 +543,11 @@ with chat_col:
             "actions": st.session_state.turn_actions,
             "latency_ms": {
                 "stt": round(st.session_state.stt_ms, 1),
-                "router": round(t_router * 1000, 1),
-                "tts_first_audio": round(tts_ms, 1),
-                "total": round(t_total * 1000, 1),
+                "router": round(router_ms, 1),
+                "dialog": round(dialog_ms, 1),
+                "reply": round(reply_ms, 1),
+                "tts": round(tts_ms, 1),
+                "total": round(t_total, 1),
             },
         }
         st.rerun()
@@ -513,6 +568,7 @@ with trace_col:
             trace.get("language"), trace.get("language", "—")
         )
         st.markdown(f"**Реплика #{trace.get('turn', '—')}** · {lang_label}")
+        st.caption("Язык ответа: " + str(trace.get("response_language", "—")))
         if trace.get("transcript"):
             st.markdown(f"> {trace['transcript']}")
 

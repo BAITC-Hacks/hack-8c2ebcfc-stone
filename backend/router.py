@@ -64,6 +64,7 @@ Reply ONLY with JSON matching this contract:
   "scenarios": [{"scenario_id": "SCxx", "confidence": 0.0-1.0, "reason": "..."}],
   "alternatives": [{"scenario_id": "SCxx", "confidence": 0.0-1.0}],
   "language": "ru|kk|mixed",
+  "response_language": "ru|kk",
   "slots": {},
   "is_continuation": false
 }
@@ -131,6 +132,9 @@ Contrastive examples of the requested service (not additional client requests):
 Apply the same distinctions in Russian, Kazakh and mixed speech.
 Language is based on the words used, not Latin characters: Russian and Kazakh can both
 be Cyrillic. Return mixed when both languages are used.
+Set response_language to the client's dominant language (ru or kk), not always kk for mixed.
+Respect an explicit request to switch language. In ambiguous mixed continuations, retain
+the previous reply language from dialog state; shared product names/acronyms do not switch it.
 Extract slots using the provided slot catalog; never invent missing values.
 Preserve slot types as given (for example drivers_iin is a list, not a string).
 For enum-type slots, map the client's words to the exact catalog code, not the spoken phrase.
@@ -151,7 +155,7 @@ def route(utterance: str, state: DialogState) -> dict:
         f"{SYSTEM_PROMPT}"
     )
     user_prompt = (
-        f"Dialog state: language={state.language}, client_id={state.client_id}, "
+        f"Dialog state: language={state.language}, response_language={state.response_language}, client_id={state.client_id}, "
         f"active_scenario={state.active_scenario}, "
         f"stack={state.scenario_stack}, known_slots={state.slots}\n\n"
         f"Recent dialog: {json.dumps(state.history[-6:], ensure_ascii=False)}\n\n"
