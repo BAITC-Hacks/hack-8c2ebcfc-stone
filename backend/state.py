@@ -7,6 +7,7 @@ from backend.data_loader import mock_backend
 @dataclass
 class DialogState:
     language: str = "ru"
+    response_language: str = "ru"
     client_id: str | None = None
     active_scenario: str | None = None
     scenario_stack: list[str] = field(default_factory=list)

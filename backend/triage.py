@@ -1,19 +1,8 @@
 import re
 
 
-def detect_language(text: str) -> str:
-    cyrillic = sum(1 for c in text if "Ѐ" <= c <= "ӿ")
-    latin = sum(1 for c in text if "a" <= c.lower() <= "z")
-    kazakh_specific = set("ӘәҒғҚқҢңӨөҰұҮүҺһІі")
-    has_kk = any(c in kazakh_specific for c in text)
-
-    if cyrillic == 0 and latin > 0:
-        return "ru"
-    if has_kk:
-        return "kk" if latin < 2 else "mixed"
-    if cyrillic > 0 and latin > 2:
-        return "mixed"
-    return "ru" if cyrillic > 0 else "ru"
+# Compatibility import; language detection never selects a scenario.
+from backend.language import detect_language
 
 
 PHONE_RE = re.compile(r"(?<!\d)(?:\+?7|8)[\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2}(?!\d)")

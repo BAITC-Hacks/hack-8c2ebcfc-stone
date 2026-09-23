@@ -1,6 +1,8 @@
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+
 
 os.environ.setdefault("OPENAI_API_KEY", "test-only")
 
@@ -12,6 +14,17 @@ APP = str(Path(__file__).resolve().parents[1] / "app.py")
 
 
 class AppReview(unittest.TestCase):
+    def setUp(self):
+        original_route = router.route
+        self.addCleanup(setattr, router, "route", original_route)
+        for target, options in (
+            ("backend.speech.speak", {"return_value": (b"audio", 1.0)}),
+            ("backend.reply_language.localize_details", {"side_effect": lambda text, lang: text}),
+        ):
+            mock = patch(target, **options)
+            mock.start()
+            self.addCleanup(mock.stop)
+
     @staticmethod
     def _route(ids, slots=None, continuation=False):
         return {
@@ -69,8 +82,8 @@ class AppReview(unittest.TestCase):
     def test_new_coverage_intent_replaces_pending_identification(self):
         def route(text, _state):
             if "терапевтке" in text:
-                return self._route(["SC21"], {"doctor_specialty": "therapist"})
-            return self._route(["SC22"], {"service_name": "МРТ"})
+                return {**self._route(["SC21"], {"doctor_specialty": "therapist"}), "language": "kk"}
+            return {**self._route(["SC22"], {"service_name": "МРТ"}), "language": "mixed"}
         router.route = route
         app = AppTest.from_file(APP).run(timeout=20)
         app.chat_input[0].set_value("Маған ДМС бойынша терапевтке жазылу керек").run(timeout=20)
@@ -103,7 +116,7 @@ class AppReview(unittest.TestCase):
         self.assertIn("Могу помочь только", reply)
 
     def test_kazakh_system_reply(self):
-        router.route = lambda *_: self._route(["SYS_OUT_OF_SCOPE"])
+        router.route = lambda *_: {**self._route(["SYS_OUT_OF_SCOPE"]), "language": "kk"}
         app = AppTest.from_file(APP).run(timeout=20)
         app.chat_input[0].set_value("Мен несие алғым келеді").run(timeout=20)
         self.assertFalse(app.exception)
@@ -117,7 +130,7 @@ class AppReview(unittest.TestCase):
         app.chat_input[0].set_value("Жоқ").run(timeout=20)
         self.assertFalse(app.exception)
         self.assertNotEqual(app.session_state.state.mock_data["clients"][0]["email"], "new@mail.example")
-        self.assertIn("Хорошо, отменяю", app.session_state.messages[-1]["text"])
+        self.assertIn("Жақсы,", app.session_state.messages[-1]["text"])
         self.assertTrue(any(a["action"] == "kb_lookup" for a in app.session_state.turn_actions))
         self.assertNotIn("{", app.session_state.messages[-1]["text"])
 
