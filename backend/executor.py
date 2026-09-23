@@ -1,8 +1,14 @@
 from backend.actions_mock import call_action, ActionError, action_spec
-from backend.data_loader import scenario_by_id
+from backend.data_loader import mock_backend, scenario_by_id
 from backend.state import DialogState
 
 _PRODUCT_PREFIXES = ("ogpo", "casco", "travel", "property", "accident", "dms")
+_CITY_NAMES = {
+    "алматы": "Almaty", "астана": "Astana", "шымкент": "Shymkent",
+    "караганда": "Karaganda", "қарағанды": "Karaganda",
+    "актобе": "Aktobe", "ақтөбе": "Aktobe", "атырау": "Atyrau",
+    "павлодар": "Pavlodar", "өскемен": "Oskemen", "усть-каменогорск": "Oskemen",
+}
 
 
 def missing_slots(scenario_id: str, state: DialogState) -> list[str]:
@@ -75,8 +81,18 @@ def _missing_irreversible_inputs(action_names: list[str], kwargs: dict) -> list[
 
 def _call_kwargs(state: DialogState, scenario: dict) -> dict:
     kwargs = dict(state.slots)
+    if isinstance(kwargs.get("city"), str):
+        kwargs["city"] = _CITY_NAMES.get(kwargs["city"].strip().lower(), kwargs["city"])
+    if isinstance(kwargs.get("region"), str):
+        kwargs["region"] = {"алматы": "almaty", "астана": "astana"}.get(
+            kwargs["region"].strip().lower(), kwargs["region"]
+        )
     if state.client_id:
         kwargs["client_id"] = state.client_id
+        if not kwargs.get("phone"):
+            client = next((c for c in mock_backend()["clients"] if c["client_id"] == state.client_id), None)
+            if client and client.get("phone"):
+                kwargs["phone"] = client["phone"]
     if "product_type" not in kwargs:
         product_type = _infer_product_type(scenario)
         if product_type:
@@ -148,6 +164,11 @@ def run_scenario(scenario_id: str, state: DialogState, confirmed: bool = False) 
 
     executed_actions = []
     for action_name in action_names:
+        if action_name == "send_sms" and not kwargs.get("phone"):
+            # Several informational scenarios offer SMS only when a phone is
+            # available; the scenario must still finish without that option.
+            executed_actions.append({"action": action_name, "mode": "skipped"})
+            continue
         try:
             result = call_action(action_name, **kwargs)
             executed_actions.append({"action": action_name, "mode": "execute", "result": result})

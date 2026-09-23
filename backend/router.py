@@ -4,7 +4,7 @@ import os
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from backend.data_loader import scenarios
+from backend.data_loader import scenarios, slots_catalog
 from backend.state import DialogState
 
 load_dotenv()
@@ -23,6 +23,8 @@ def _scenario_catalog_prompt() -> str:
         lines.append(
             f"{s['scenario_id']} ({s['domain']}/{s['category']}, priority={s['priority']}): "
             f"{s['description']}"
+            f" | required slots: {', '.join(s.get('slots', {}).get('required', [])) or 'none'}"
+            f" | optional slots: {', '.join(s.get('slots', {}).get('optional', [])) or 'none'}"
             + (f" | not this if: {not_this_if}" if not_this_if else "")
         )
     return "\n".join(lines)
@@ -41,7 +43,7 @@ Reply ONLY with JSON matching this contract:
 Saqta Insurance only sells and services insurance (auto, health, travel, property, accident, corporate).
 It does NOT offer loans, life insurance, pensions, weather, jobs, or anything unrelated to insurance servicing.
 
-The "scenarios" list must NEVER be empty. Always put exactly one entry there:
+The "scenarios" list must NEVER be empty. Include each distinct request once:
 - A real scenario_id (SC01-SC40) if you can identify what the client wants, even with medium confidence.
 - "SYS_OUT_OF_SCOPE" if the request has nothing to do with Saqta's insurance products or services.
 - "SYS_UNCLEAR" only if the request IS about Saqta but you truly cannot tell which scenario — never for off-topic requests.
@@ -50,12 +52,22 @@ The "scenarios" list must NEVER be empty. Always put exactly one entry there:
 If the client's turn contains more than one distinct request (multi-intent), list ALL of them in "scenarios",
 in the order the client said them, but with any priority="urgent" scenario moved first.
 Urgent scenarios (priority=urgent) must be prioritized when present.
+Extract only slot names from the chosen scenario catalog entries. Preserve the slot types
+(for example drivers_iin is a list), normalize dates as YYYY-MM-DD relative to 2026-10-01,
+and do not guess missing values. For a short answer supplying a requested slot, keep the
+active scenario and set is_continuation=true.
 """
 
 
 def route(utterance: str, state: DialogState) -> dict:
+    enum_slots = [
+        f"{slot['name']}: {', '.join(slot['values'])}"
+        for slot in slots_catalog()["slots"] if slot.get("values")
+    ]
     user_prompt = (
         f"Scenario catalog:\n{_scenario_catalog_prompt()}\n\n"
+        f"Allowed enum slot values (map Russian/Kazakh names to these codes):\n"
+        f"{'; '.join(enum_slots)}\n\n"
         f"Dialog state: active_scenario={state.active_scenario}, "
         f"stack={state.scenario_stack}, known_slots={state.slots}\n\n"
         f"Client utterance: {utterance}"

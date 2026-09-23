@@ -23,12 +23,16 @@ if "awaiting_identification" not in st.session_state:
     st.session_state.awaiting_identification = None
 if "awaiting_confirmation" not in st.session_state:
     st.session_state.awaiting_confirmation = None
+if "awaiting_slots" not in st.session_state:
+    st.session_state.awaiting_slots = None
+if "queued_scenarios" not in st.session_state:
+    st.session_state.queued_scenarios = []
 
 st.title("Saqta Insurance — Voice Router")
 
 IIN_RE = re.compile(r"\b\d{12}\b")
-YES_WORDS = {"да", "ага", "угу", "подтверждаю", "ок", "окей", "конечно", "хорошо", "yes", "ok"}
-NO_WORDS = {"нет", "не", "отмена", "отменить", "no", "cancel"}
+YES_WORDS = {"да", "ага", "угу", "подтверждаю", "ок", "окей", "конечно", "хорошо", "yes", "ok", "иә"}
+NO_WORDS = {"нет", "отмена", "отменить", "no", "cancel", "жоқ"}
 
 
 def _extract_identity(text: str) -> dict:
@@ -43,7 +47,7 @@ def _extract_identity(text: str) -> dict:
 
 
 def _closing_message(scenario: dict, state: DialogState, executed_actions: list[dict]) -> str:
-    merged = {}
+    merged = dict(state.slots)
     for a in executed_actions:
         if isinstance(a.get("result"), dict):
             merged.update(a["result"])
@@ -60,16 +64,19 @@ def _closing_message(scenario: dict, state: DialogState, executed_actions: list[
 def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
     status = result.get("status")
     scenario = scenario_by_id(scenario_id) or {}
+    st.session_state.turn_actions.extend(result.get("actions", []))
 
     if status == "need_identification":
         st.session_state.awaiting_identification = scenario_id
         return "Для этой операции нужно вас идентифицировать. Назовите, пожалуйста, номер телефона или ИИН."
 
     if status == "need_slots":
+        st.session_state.awaiting_slots = scenario_id
         missing = result.get("slots", [])
         return "Уточните, пожалуйста: " + ", ".join(missing)
 
     if status == "need_confirmation":
+        st.session_state.awaiting_slots = None
         st.session_state.awaiting_confirmation = scenario_id
         previews = [
             f"{a['action']}: {a['result']}"
@@ -86,8 +93,14 @@ def handle_result(scenario_id: str, result: dict, state: DialogState) -> str:
         )
 
     if status == "done":
+        st.session_state.awaiting_slots = None
         st.session_state.awaiting_confirmation = None
-        return _closing_message(scenario, state, result.get("actions", []))
+        reply = _closing_message(scenario, state, result.get("actions", []))
+        if st.session_state.queued_scenarios:
+            next_id = st.session_state.queued_scenarios.pop(0)
+            next_result = run_scenario(next_id, state)
+            reply += " " + handle_result(next_id, next_result, state)
+        return reply
 
     if status == "error":
         return f"Не удалось определить сценарий: {result.get('reason')}"
@@ -106,6 +119,7 @@ with chat_col:
 
     if user_input:
         state = st.session_state.state
+        st.session_state.turn_actions = []
         st.session_state.messages.append({"role": "user", "text": user_input})
         state.language = detect_language(user_input)
 
@@ -120,6 +134,8 @@ with chat_col:
             try:
                 found = call_action("find_client", **ident)
                 state.client_id = found["client_id"]
+                for slot_name, slot_value in ident.items():
+                    state.set_slot(slot_name, slot_value)
                 st.session_state.awaiting_identification = None
                 result = run_scenario(scenario_id, state)
                 reply = handle_result(scenario_id, result, state)
@@ -128,12 +144,12 @@ with chat_col:
 
         elif st.session_state.awaiting_confirmation:
             scenario_id = st.session_state.awaiting_confirmation
-            answer = user_input.strip().lower()
-            if any(w in answer for w in YES_WORDS):
+            answer_words = set(re.findall(r"[\w]+", user_input.lower()))
+            if answer_words & YES_WORDS and not answer_words & NO_WORDS:
                 st.session_state.awaiting_confirmation = None
                 result = run_scenario(scenario_id, state, confirmed=True)
                 reply = handle_result(scenario_id, result, state)
-            elif any(w in answer for w in NO_WORDS):
+            elif answer_words & NO_WORDS and not answer_words & YES_WORDS:
                 st.session_state.awaiting_confirmation = None
                 state.pending_confirmation = None
                 reply = "Хорошо, отменяю операцию."
@@ -141,6 +157,8 @@ with chat_col:
                 reply = "Пожалуйста, подтвердите (да/нет)."
 
         else:
+            if st.session_state.awaiting_slots:
+                state.active_scenario = st.session_state.awaiting_slots
             router_output = route(user_input, state)
             for slot_name, slot_value in router_output.get("slots", {}).items():
                 state.set_slot(slot_name, slot_value)
@@ -149,9 +167,25 @@ with chat_col:
             decision_action = decision.action
 
             if decision.action == "run":
-                scenario_id = decision.scenario_ids[0]
-                result = run_scenario(scenario_id, state)
-                reply = handle_result(scenario_id, result, state)
+                is_slot_continuation = bool(
+                    router_output.get("is_continuation") and st.session_state.awaiting_slots
+                )
+                scenario_id = (
+                    st.session_state.awaiting_slots
+                    if is_slot_continuation
+                    else decision.scenario_ids[0]
+                )
+                if not is_slot_continuation:
+                    st.session_state.queued_scenarios = decision.scenario_ids[1:]
+                if scenario_id == "SYS_OUT_OF_SCOPE":
+                    reply = "Могу помочь только с продуктами и услугами Saqta Insurance."
+                elif scenario_id == "SYS_UNCLEAR":
+                    reply = "Уточните, пожалуйста, с каким страховым вопросом вам помочь?"
+                elif scenario_id == "SYS_GOODBYE":
+                    reply = "До свидания!"
+                else:
+                    result = run_scenario(scenario_id, state)
+                    reply = handle_result(scenario_id, result, state)
                 st.session_state.low_confidence_streak = 0
             elif decision.action == "clarify":
                 reply = "Уточните, пожалуйста, что именно вас интересует: " + ", ".join(decision.clarify_options)
@@ -175,7 +209,7 @@ with chat_col:
             "reason": [s.get("reason") for s in (router_output or {}).get("scenarios", [])],
             "decision": decision_action,
             "slots": state.slots,
-            "actions": (result or {}).get("actions", []) if result else [],
+            "actions": st.session_state.turn_actions,
             "latency_ms": {"total": round(t_total * 1000, 1)},
         }
         st.rerun()

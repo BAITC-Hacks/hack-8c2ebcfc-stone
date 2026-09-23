@@ -477,9 +477,16 @@ _KB_TOPICS = {
 def kb_lookup(topic: str, **_) -> dict:
     kb = knowledge_base()
     topic_lower = (topic or "").lower()
+    for product in ("ogpo", "casco", "travel", "property", "accident", "dms"):
+        if product in topic_lower:
+            return {"answer": kb["products"][product]}
     for keyword, section in _KB_TOPICS.items():
         if keyword in topic_lower:
             return {"answer": kb[section]}
+    if any(term in topic_lower for term in ("франш", "franch")):
+        return {"answer": kb["products"]["casco"]}
+    if any(term in topic_lower for term in ("лимит", "limit", "покры", "өтем", "кірмей", "исключ")):
+        return {"answer": kb["products"]}
     raise ActionError("not_found", f"no knowledge base entry for '{topic}'")
 
 
