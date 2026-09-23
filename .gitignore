@@ -4,3 +4,8 @@ node_modules/
 .venv/
 *.pyc
 .DS_Store
+.handoff/
+.handoff-runtime/
+.agents/
+app.db
+chroma_data/
