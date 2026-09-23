@@ -11,10 +11,11 @@ OUT_PATH = Path(__file__).resolve().parent / "predictions.json"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the router on the labeled dev set")
+    parser = argparse.ArgumentParser(description="Run the router on a labeled utterance set")
+    parser.add_argument("--input", type=Path, default=DEV_PATH)
     parser.add_argument("--output", type=Path, default=OUT_PATH)
     args = parser.parse_args()
-    dev = json.loads(DEV_PATH.read_text(encoding="utf-8"))
+    dev = json.loads(args.input.read_text(encoding="utf-8"))
     predictions = {}
 
     for item in dev["utterances"] if "utterances" in dev else dev:
